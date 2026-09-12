@@ -5,7 +5,7 @@
 | Block | Directory | Status | Role |
 |---|---|---|---|
 | **Block 1** | `traffic_generator/` | ✅ Implemented | Generates synthetic unidirectional IP traffic (PCAP + labels + metadata) |
-| **Block 2** | `feature_extractor/` | ⬜ Planned | Extracts NetFlow-style features from PCAPs |
+| **Block 2** | `feature_extractor/` | ✅ Implemented | Extracts NetFlow-style features from PCAPs |
 | **Block 3** | `ml_engine/` | ⬜ Planned | ML-based threat detection/classification |
 | **Block 4** | `dashboard/` | ⬜ Planned | Visualization / user interface |
 
@@ -54,12 +54,43 @@ traffic_generator/
 `metadata/`. See `docs/dataset.md` for the full schema and Block 1 → Block 2
 interface contract.
 
+## Block 2 — Feature Extractor
+
+**Purpose:** Read Block 1 PCAPs (read-only), reconstruct unidirectional flows,
+compute ML-ready NetFlow-style features, validate against ground truth.
+
+**Modules:** `feature_extractor/` — `models.py` (PacketRecord, ExtractedFlow,
+FEATURE_COLUMNS), `pcap_reader.py` (Scapy rdpcap wrapper), 
+`flow_reconstructor.py` (5-tuple grouping + boundary rules), `features.py`
+(feature computation), `labels.py` (GT reader/join — labels only),
+`validation.py` (extracted-vs-GT comparison), `writer.py`, `extractor.py`
+(orchestrator), `cli.py`.
+
+**Key design decisions:**
+
+- **Features come ONLY from PCAPs.** GT CSV is used exclusively for labels
+  and post-extraction validation (verified by a dedicated test).
+- **Flow rules:** direction-sensitive 5-tuple; idle timeout 15s; active
+  timeout 30s.
+- **Documented deviation (user-approved Option 2):** TCP FIN/RST marks the
+  end of a connection attempt but does NOT split a flow — same-5-tuple
+  packets re-join. Rationale: frozen Block 1 GT defines one flow per
+  5-tuple per run (c2_beacon emits repeated FIN-terminated beacon
+  connections within a single GT flow). FIN/RST remain as features
+  (tcp_fin_count/tcp_rst_count).
+- **Output:** `data/processed/{dataset_id}/` — `flows.csv` (features only),
+  `flows_with_labels.csv` (join by `run_id + flow_key`),
+  `validation_report.json`, `extraction_manifest.json`.
+- **Determinism:** no randomness; deterministic flow_id assignment
+  (`{run_id}__{seq:04d}` sorted by `(start_ts, flow_key)`); byte-identical
+  output across runs.
+
 ## Data Flow
 
 ```
 Block 1 (traffic_generator)
   → data/raw/{dataset_id}/ (PCAP + labels + metadata + manifest)
-  → Block 2 (feature_extractor)   [planned]
+  → Block 2 (feature_extractor)
   → data/processed/ (NetFlow features)
   → Block 3 (ml_engine)           [planned]
   → models/ (trained artifacts)

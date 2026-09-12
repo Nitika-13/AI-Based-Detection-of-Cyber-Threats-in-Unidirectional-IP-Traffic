@@ -2,3 +2,9 @@
 #
 # Block 1 (Traffic Generator) dependencies:
 scapy>=2.5.0
+#
+# Block 2 (Feature Extractor) dependencies:
+# (scapy shared with Block 1; stdlib only otherwise)
+#
+# Testing:
+pytest>=8.0.0
