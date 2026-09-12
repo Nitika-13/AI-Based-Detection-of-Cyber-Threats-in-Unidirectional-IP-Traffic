@@ -12,6 +12,14 @@ from ..utils import (
 )
 from .base import BaseScenario
 
+# Actual IP total lengths (Scapy computes IP.len from serialized bytes):
+#   TCP: 20 (IP) + 20 (TCP) + payload
+#   UDP: 20 (IP) + 8  (UDP) + payload
+#   ICMP: 20 (IP) + 8  (ICMP) + payload
+TCP_NO_PAYLOAD_LEN = 40
+UDP_NO_PAYLOAD_LEN = 28
+ICMP_NO_PAYLOAD_LEN = 28
+
 
 class BenignScenario(BaseScenario):
     """Generates low-rate, varied benign traffic (web/DNS/ICMP)."""
@@ -35,24 +43,24 @@ class BenignScenario(BaseScenario):
                 flow = self._new_flow(flow_id, src_ip, sp, dst_ip, dp, "tcp", "benign")
                 t = t0 + self.rng.uniform(0, duration * 0.8)
                 seq = self.rng.randint(0, 2**31)
-                # SYN
-                self._add_packet(flow, timestamp=t, ip_total_length=60, tcp_flags="S", tcp_seq=seq)
-                # Data packets (ACK+PSH)
+                # SYN (no payload: IP.len = 40)
+                self._add_packet(flow, timestamp=t, ip_total_length=TCP_NO_PAYLOAD_LEN, tcp_flags="S", tcp_seq=seq)
+                # Data packets (ACK+PSH): IP.len = 40 + payload
                 n_pkts = self.rng.randint(2, 8)
                 for j in range(n_pkts):
                     t = next_timestamp(self.rng, t, 0.01, 0.5)
                     size = self.rng.randint(64, 1200)
                     payload = random_payload_ascii(self.rng, max(0, size - 40))
                     self._add_packet(
-                        flow, timestamp=t, ip_total_length=size,
+                        flow, timestamp=t, ip_total_length=40 + len(payload),
                         tcp_flags="PA", tcp_seq=seq + j * 100, tcp_ack=1,
                         payload=payload,
                     )
-                # FIN+ACK
+                # FIN+ACK (no payload: IP.len = 40)
                 t = next_timestamp(self.rng, t, 0.01, 0.5)
-                self._add_packet(flow, timestamp=t, ip_total_length=60, tcp_flags="FA", tcp_seq=seq + n_pkts * 100, tcp_ack=1)
+                self._add_packet(flow, timestamp=t, ip_total_length=TCP_NO_PAYLOAD_LEN, tcp_flags="FA", tcp_seq=seq + n_pkts * 100, tcp_ack=1)
             elif proto_choice < 0.8:
-                # DNS query (UDP/53)
+                # DNS query (UDP/53): IP.len = 28 + payload
                 sp, dp, _ = self._allocate_key(src_ip, dst_ip, "udp", dst_port=53)
                 flow = self._new_flow(flow_id, src_ip, sp, dst_ip, dp, "udp", "benign")
                 t = t0 + self.rng.uniform(0, duration * 0.8)
@@ -60,8 +68,7 @@ class BenignScenario(BaseScenario):
                 for _ in range(n_pkts):
                     t = next_timestamp(self.rng, t, 0.001, 0.1)
                     payload = random_payload_dns(self.rng, self.rng.randint(10, 40))
-                    size = 28 + len(payload)  # IP(20) + UDP(8) + payload
-                    self._add_packet(flow, timestamp=t, ip_total_length=size, payload=payload)
+                    self._add_packet(flow, timestamp=t, ip_total_length=28 + len(payload), payload=payload)
             else:
                 # ICMP echo request (ports 0 per approved design)
                 sp, dp = 0, 0
@@ -75,8 +82,8 @@ class BenignScenario(BaseScenario):
                 n_pkts = self.rng.randint(1, 4)
                 for _ in range(n_pkts):
                     t = next_timestamp(self.rng, t, 0.01, 0.5)
-                    size = self.rng.randint(64, 128)
-                    self._add_packet(flow, timestamp=t, ip_total_length=size, icmp_type=8, icmp_code=0)
+                    # ICMP echo request with no payload: IP.len = 28
+                    self._add_packet(flow, timestamp=t, ip_total_length=ICMP_NO_PAYLOAD_LEN, icmp_type=8, icmp_code=0)
 
             flows.append(flow)
 

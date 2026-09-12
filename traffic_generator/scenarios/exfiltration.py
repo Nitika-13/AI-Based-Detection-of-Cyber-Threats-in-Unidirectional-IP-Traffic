@@ -8,6 +8,10 @@ from ..models import Flow
 from ..utils import next_timestamp, random_payload_ascii
 from .base import BaseScenario
 
+# Actual IP total lengths (Scapy computes IP.len from serialized bytes):
+TCP_NO_PAYLOAD_LEN = 40
+UDP_NO_PAYLOAD_LEN = 28
+
 
 class ExfiltrationScenario(BaseScenario):
     """Generates large sustained outbound TCP/UDP transfers plus benign background."""
@@ -31,11 +35,12 @@ class ExfiltrationScenario(BaseScenario):
             n_pkts = self.rng.randint(2, 5)
             for j in range(n_pkts):
                 t = next_timestamp(self.rng, t, 0.01, 0.5)
-                size = self.rng.randint(64, 600)
                 if proto == "tcp":
-                    self._add_packet(flow, timestamp=t, ip_total_length=size, tcp_flags="PA", tcp_seq=j * 100, tcp_ack=1)
+                    # No payload: IP.len = 40
+                    self._add_packet(flow, timestamp=t, ip_total_length=TCP_NO_PAYLOAD_LEN, tcp_flags="PA", tcp_seq=j * 100, tcp_ack=1)
                 else:
-                    self._add_packet(flow, timestamp=t, ip_total_length=size)
+                    # No payload: IP.len = 28
+                    self._add_packet(flow, timestamp=t, ip_total_length=UDP_NO_PAYLOAD_LEN)
             flows.append(flow)
 
         # Exfiltration flows (label=exfiltration)
@@ -51,12 +56,15 @@ class ExfiltrationScenario(BaseScenario):
             seq = self.rng.randint(0, 2**31)
             for j in range(n_pkts):
                 t = next_timestamp(self.rng, t, 0.001, 0.1)
-                size = self.rng.randint(1000, 1500)  # large packets
-                payload = random_payload_ascii(self.rng, max(0, size - 40))
+                # Large packets: IP.len = header + payload
                 if proto == "tcp":
-                    self._add_packet(flow, timestamp=t, ip_total_length=size, tcp_flags="PA", tcp_seq=seq + j * 1400, tcp_ack=1, payload=payload)
+                    size = self.rng.randint(1000, 1500)
+                    payload = random_payload_ascii(self.rng, max(0, size - 40))
+                    self._add_packet(flow, timestamp=t, ip_total_length=40 + len(payload), tcp_flags="PA", tcp_seq=seq + j * 1400, tcp_ack=1, payload=payload)
                 else:
-                    self._add_packet(flow, timestamp=t, ip_total_length=size, payload=payload)
+                    size = self.rng.randint(1000, 1500)
+                    payload = random_payload_ascii(self.rng, max(0, size - 28))
+                    self._add_packet(flow, timestamp=t, ip_total_length=28 + len(payload), payload=payload)
             flows.append(flow)
 
         return flows

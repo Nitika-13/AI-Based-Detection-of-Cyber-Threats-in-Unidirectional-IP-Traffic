@@ -31,11 +31,11 @@ class DNSAnomalyScenario(BaseScenario):
             n_pkts = self.rng.randint(2, 5)
             for j in range(n_pkts):
                 t = next_timestamp(self.rng, t, 0.01, 0.5)
-                size = self.rng.randint(64, 600)
+                # Header-only background packets: IPv4 + transport header.
                 if proto == "tcp":
-                    self._add_packet(flow, timestamp=t, ip_total_length=size, tcp_flags="PA", tcp_seq=j * 100, tcp_ack=1)
+                    self._add_packet(flow, timestamp=t, ip_total_length=40, tcp_flags="PA", tcp_seq=j * 100, tcp_ack=1)
                 else:
-                    self._add_packet(flow, timestamp=t, ip_total_length=size)
+                    self._add_packet(flow, timestamp=t, ip_total_length=28)
             flows.append(flow)
 
         # DNS anomaly flows (label=dns_anomaly)

@@ -31,11 +31,11 @@ class PortScanScenario(BaseScenario):
             n_pkts = self.rng.randint(2, 5)
             for j in range(n_pkts):
                 t = next_timestamp(self.rng, t, 0.01, 0.5)
-                size = self.rng.randint(64, 600)
+                # Header-only background packets: IPv4 + transport header.
                 if proto == "tcp":
-                    self._add_packet(flow, timestamp=t, ip_total_length=size, tcp_flags="PA", tcp_seq=j * 100, tcp_ack=1)
+                    self._add_packet(flow, timestamp=t, ip_total_length=40, tcp_flags="PA", tcp_seq=j * 100, tcp_ack=1)
                 else:
-                    self._add_packet(flow, timestamp=t, ip_total_length=size)
+                    self._add_packet(flow, timestamp=t, ip_total_length=28)
             flows.append(flow)
 
         # Port scan flows (label=port_scan)
@@ -54,7 +54,8 @@ class PortScanScenario(BaseScenario):
             seq = self.rng.randint(0, 2**31)
             for j in range(n_pkts):
                 t = next_timestamp(self.rng, t, 0.001, 0.1)
-                self._add_packet(flow, timestamp=t, ip_total_length=60, tcp_flags="S", tcp_seq=seq + j)
+                # SYN (no payload): IP.len = 40
+                self._add_packet(flow, timestamp=t, ip_total_length=40, tcp_flags="S", tcp_seq=seq + j)
             flows.append(flow)
 
         return flows

@@ -5,6 +5,7 @@ Verifies that:
 2. Flow keys are unique within each run.
 3. Extracted features (packet_count, byte_count) match the CSV.
 4. All labels are in the supported set.
+5. Every packet's declared IP.len equals its actual serialized IP length.
 """
 
 from __future__ import annotations
@@ -74,6 +75,19 @@ def validate_run(dataset_dir: Path, run: dict) -> list[str]:
             sport, dport = 0, 0
         key = f"{ip.src}:{sport}->{ip.dst}:{dport}/{proto}"
         pcap_flows.setdefault(key, []).append(pkt)
+
+    # Verify every packet's declared IP.len matches its actual serialized
+    # IP length (catches malformed packets with inconsistent headers).
+    for pkt in packets:
+        if "IP" not in pkt:
+            continue
+        ip = pkt["IP"]
+        actual_len = len(bytes(ip))
+        if ip.len != actual_len:
+            errors.append(
+                f"IP.len mismatch: declared {ip.len}, actual {actual_len} "
+                f"({ip.src} -> {ip.dst})"
+            )
 
     # Verify every CSV flow has packets in the PCAP.
     for row in rows:

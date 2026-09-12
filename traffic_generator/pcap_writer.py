@@ -20,7 +20,11 @@ logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 
 
 def build_scapy_packet(spec: PacketSpec) -> Packet:
-    """Build a single Scapy packet from a PacketSpec (Ethernet + IPv4)."""
+    """Build a single Scapy packet from a PacketSpec (Ethernet + IPv4).
+
+    IP.len is computed by Scapy from the actual serialized packet, so the
+    declared IP total length always matches the real IP packet length.
+    """
     eth = Ether(src=SRC_MAC, dst=DST_MAC)
     ip = IP(src=spec.src_ip, dst=spec.dst_ip)
 
@@ -40,8 +44,8 @@ def build_scapy_packet(spec: PacketSpec) -> Packet:
         raise ValueError(f"Unsupported protocol: {spec.protocol}")
 
     pkt = eth / ip / transport / spec.payload
-    pkt[IP].len = spec.ip_total_length
-    # Set the packet timestamp for deterministic PCAP output.
+    # NOTE: Do NOT override pkt[IP].len here. Scapy computes it from the
+    # actual serialized packet, guaranteeing IP.len == real IP length.
     pkt.time = spec.timestamp
     return pkt
 

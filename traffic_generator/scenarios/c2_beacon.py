@@ -8,6 +8,9 @@ from ..models import Flow
 from ..utils import next_timestamp, random_payload_ascii
 from .base import BaseScenario
 
+# Actual IP total lengths (Scapy computes IP.len from serialized bytes):
+TCP_NO_PAYLOAD_LEN = 40
+
 
 class C2BeaconScenario(BaseScenario):
     """Generates periodic beaconing flows to a C2 IP plus benign background."""
@@ -31,11 +34,12 @@ class C2BeaconScenario(BaseScenario):
             n_pkts = self.rng.randint(2, 5)
             for j in range(n_pkts):
                 t = next_timestamp(self.rng, t, 0.01, 0.5)
-                size = self.rng.randint(64, 600)
                 if proto == "tcp":
-                    self._add_packet(flow, timestamp=t, ip_total_length=size, tcp_flags="PA", tcp_seq=j * 100, tcp_ack=1)
+                    # No payload: IP.len = 40
+                    self._add_packet(flow, timestamp=t, ip_total_length=TCP_NO_PAYLOAD_LEN, tcp_flags="PA", tcp_seq=j * 100, tcp_ack=1)
                 else:
-                    self._add_packet(flow, timestamp=t, ip_total_length=size)
+                    # No payload: IP.len = 28
+                    self._add_packet(flow, timestamp=t, ip_total_length=28)
             flows.append(flow)
 
         # C2 beacon flows (label=c2_beacon)
@@ -56,16 +60,16 @@ class C2BeaconScenario(BaseScenario):
             n_beacons = max(2, int(duration / beacon_interval))
             seq = self.rng.randint(0, 2**31)
             for j in range(n_beacons):
-                # SYN
-                self._add_packet(flow, timestamp=t, ip_total_length=60, tcp_flags="S", tcp_seq=seq + j * 1000)
-                # Small data (ACK+PSH)
+                # SYN (no payload: IP.len = 40)
+                self._add_packet(flow, timestamp=t, ip_total_length=TCP_NO_PAYLOAD_LEN, tcp_flags="S", tcp_seq=seq + j * 1000)
+                # Small data (ACK+PSH): IP.len = 40 + payload
                 t = next_timestamp(self.rng, t, 0.001, 0.01)
                 size = self.rng.randint(64, 200)
                 payload = random_payload_ascii(self.rng, max(0, size - 40))
-                self._add_packet(flow, timestamp=t, ip_total_length=size, tcp_flags="PA", tcp_seq=seq + j * 1000 + 1, tcp_ack=1, payload=payload)
-                # FIN+ACK
+                self._add_packet(flow, timestamp=t, ip_total_length=40 + len(payload), tcp_flags="PA", tcp_seq=seq + j * 1000 + 1, tcp_ack=1, payload=payload)
+                # FIN+ACK (no payload: IP.len = 40)
                 t = next_timestamp(self.rng, t, 0.001, 0.01)
-                self._add_packet(flow, timestamp=t, ip_total_length=60, tcp_flags="FA", tcp_seq=seq + j * 1000 + 2, tcp_ack=1)
+                self._add_packet(flow, timestamp=t, ip_total_length=TCP_NO_PAYLOAD_LEN, tcp_flags="FA", tcp_seq=seq + j * 1000 + 2, tcp_ack=1)
                 # Next beacon at fixed interval
                 t = t + beacon_interval
             flows.append(flow)

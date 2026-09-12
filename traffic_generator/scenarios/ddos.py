@@ -8,6 +8,10 @@ from ..models import Flow
 from ..utils import next_timestamp
 from .base import BaseScenario
 
+# Actual IP total lengths (Scapy computes IP.len from serialized bytes):
+TCP_NO_PAYLOAD_LEN = 40
+UDP_NO_PAYLOAD_LEN = 28
+
 
 class DDoSScenario(BaseScenario):
     """Generates high-rate SYN flood and UDP flood flows plus benign background."""
@@ -31,11 +35,12 @@ class DDoSScenario(BaseScenario):
             n_pkts = self.rng.randint(2, 5)
             for j in range(n_pkts):
                 t = next_timestamp(self.rng, t, 0.01, 0.5)
-                size = self.rng.randint(64, 600)
                 if proto == "tcp":
-                    self._add_packet(flow, timestamp=t, ip_total_length=size, tcp_flags="PA", tcp_seq=j * 100, tcp_ack=1)
+                    # No payload: IP.len = 40
+                    self._add_packet(flow, timestamp=t, ip_total_length=TCP_NO_PAYLOAD_LEN, tcp_flags="PA", tcp_seq=j * 100, tcp_ack=1)
                 else:
-                    self._add_packet(flow, timestamp=t, ip_total_length=size)
+                    # No payload: IP.len = 28
+                    self._add_packet(flow, timestamp=t, ip_total_length=UDP_NO_PAYLOAD_LEN)
             flows.append(flow)
 
         # Attack flows: SYN flood (label=ddos)
@@ -49,7 +54,8 @@ class DDoSScenario(BaseScenario):
             seq = self.rng.randint(0, 2**31)
             for j in range(n_pkts):
                 t = next_timestamp(self.rng, t, 0.001, 0.05)
-                self._add_packet(flow, timestamp=t, ip_total_length=60, tcp_flags="S", tcp_seq=seq + j)
+                # SYN (no payload): IP.len = 40
+                self._add_packet(flow, timestamp=t, ip_total_length=TCP_NO_PAYLOAD_LEN, tcp_flags="S", tcp_seq=seq + j)
             flows.append(flow)
 
         # Attack flows: UDP flood (label=ddos)
@@ -61,8 +67,8 @@ class DDoSScenario(BaseScenario):
             n_pkts = self.rng.randint(5, 20)
             for _ in range(n_pkts):
                 t = next_timestamp(self.rng, t, 0.001, 0.05)
-                size = self.rng.randint(64, 300)
-                self._add_packet(flow, timestamp=t, ip_total_length=size)
+                # No payload: IP.len = 28
+                self._add_packet(flow, timestamp=t, ip_total_length=UDP_NO_PAYLOAD_LEN)
             flows.append(flow)
 
         return flows

@@ -13,6 +13,9 @@ from ..models import Flow
 from ..utils import next_timestamp, random_tls_like_payload
 from .base import BaseScenario
 
+# Actual IP total lengths (Scapy computes IP.len from serialized bytes):
+TCP_NO_PAYLOAD_LEN = 40
+
 
 class EncryptedAnomalyScenario(BaseScenario):
     """Generates synthetic TLS-like flows with anomalous patterns plus benign background."""
@@ -36,11 +39,12 @@ class EncryptedAnomalyScenario(BaseScenario):
             n_pkts = self.rng.randint(2, 5)
             for j in range(n_pkts):
                 t = next_timestamp(self.rng, t, 0.01, 0.5)
-                size = self.rng.randint(64, 600)
                 if proto == "tcp":
-                    self._add_packet(flow, timestamp=t, ip_total_length=size, tcp_flags="PA", tcp_seq=j * 100, tcp_ack=1)
+                    # No payload: IP.len = 40
+                    self._add_packet(flow, timestamp=t, ip_total_length=TCP_NO_PAYLOAD_LEN, tcp_flags="PA", tcp_seq=j * 100, tcp_ack=1)
                 else:
-                    self._add_packet(flow, timestamp=t, ip_total_length=size)
+                    # No payload: IP.len = 28
+                    self._add_packet(flow, timestamp=t, ip_total_length=28)
             flows.append(flow)
 
         # Encrypted anomaly flows (label=encrypted_anomaly)
@@ -53,9 +57,9 @@ class EncryptedAnomalyScenario(BaseScenario):
             t = t0 + self.rng.uniform(0, duration * 0.3)
             seq = self.rng.randint(0, 2**31)
 
-            # SYN
-            self._add_packet(flow, timestamp=t, ip_total_length=60, tcp_flags="S", tcp_seq=seq)
-            # TLS-like records
+            # SYN (no payload: IP.len = 40)
+            self._add_packet(flow, timestamp=t, ip_total_length=TCP_NO_PAYLOAD_LEN, tcp_flags="S", tcp_seq=seq)
+            # TLS-like records: IP.len = 40 + payload
             n_pkts = self.rng.randint(5, 15)
             for j in range(n_pkts):
                 t = next_timestamp(self.rng, t, 0.001, 0.1)
@@ -70,13 +74,13 @@ class EncryptedAnomalyScenario(BaseScenario):
                     size = self.rng.choice([64, 128, 256, 512, 1024])
                 payload = random_tls_like_payload(self.rng, max(0, size - 40))
                 self._add_packet(
-                    flow, timestamp=t, ip_total_length=size,
+                    flow, timestamp=t, ip_total_length=40 + len(payload),
                     tcp_flags="PA", tcp_seq=seq + j * 1500, tcp_ack=1,
                     payload=payload,
                 )
-            # FIN+ACK
+            # FIN+ACK (no payload: IP.len = 40)
             t = next_timestamp(self.rng, t, 0.001, 0.1)
-            self._add_packet(flow, timestamp=t, ip_total_length=60, tcp_flags="FA", tcp_seq=seq + n_pkts * 1500, tcp_ack=1)
+            self._add_packet(flow, timestamp=t, ip_total_length=TCP_NO_PAYLOAD_LEN, tcp_flags="FA", tcp_seq=seq + n_pkts * 1500, tcp_ack=1)
             flows.append(flow)
 
         return flows
