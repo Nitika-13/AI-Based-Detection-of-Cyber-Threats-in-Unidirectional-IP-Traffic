@@ -60,11 +60,13 @@ interface contract.
 compute ML-ready NetFlow-style features, validate against ground truth.
 
 **Modules:** `feature_extractor/` — `models.py` (PacketRecord, ExtractedFlow,
-FEATURE_COLUMNS), `pcap_reader.py` (Scapy rdpcap wrapper), 
-`flow_reconstructor.py` (5-tuple grouping + boundary rules), `features.py`
-(feature computation), `labels.py` (GT reader/join — labels only),
-`validation.py` (extracted-vs-GT comparison), `writer.py`, `extractor.py`
-(orchestrator), `cli.py`.
+FEATURE_COLUMNS), `pcap_reader.py` (Scapy rdpcap wrapper, captures transport
+payload bytes), `payload_features.py` (DNS/TLS-record parsers, Shannon
+entropy — no decryption), `flow_reconstructor.py` (5-tuple grouping +
+boundary rules), `features.py` (feature computation), `labels.py` (GT
+reader/join — labels only), `validation.py` (extracted-vs-GT comparison +
+DNS/TLS structural checks), `writer.py`, `extractor.py` (orchestrator),
+`cli.py`.
 
 **Key design decisions:**
 
@@ -84,6 +86,20 @@ FEATURE_COLUMNS), `pcap_reader.py` (Scapy rdpcap wrapper),
 - **Determinism:** no randomness; deterministic flow_id assignment
   (`{run_id}__{seq:04d}` sorted by `(start_ts, flow_key)`); byte-identical
   output across runs.
+- **DNS metadata (PCAP-derived):** for UDP dst-port-53 flows —
+  `dns_packet_count`, `dns_qname_len_mean/max`, `dns_qname_entropy_mean/max`,
+  `dns_qtype_mode`. Parsed with a custom byte-level parser because Block 1
+  emits bare QNAME fragments with no DNS header (Scapy DNS cannot dissect
+  them). Zero for non-DNS flows.
+- **TLS record metadata (PCAP-derived, no decryption):** for TCP dst-port-443
+  flows — `tls_record_count`, `tls_version_mode`, `tls_content_type_mode`,
+  `tls_record_len_mean/max`, `tls_payload_entropy_mean`.
+- **Synthetic TLS limitation (explicit):** Block 1 emits TLS-like *record
+  headers only* — there is NO real ClientHello body, NO SNI, NO
+  cipher-suite/extension lists. Therefore JA3/JA4 fingerprints and SNI
+  features are genuinely impossible with the current generator, and
+  `tls_record_len_*` is the TLS *record* declared length, NOT a ClientHello
+  length. No payload decryption is performed at any point.
 
 ## Data Flow
 

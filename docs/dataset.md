@@ -74,3 +74,37 @@ making segmentation and the 1:1 join unambiguous.
 
 Same `--seed` produces byte-identical PCAPs and CSVs. Each scenario derives a
 deterministic sub-seed from the global seed, run index, and scenario name.
+
+## Block 2 Output (Feature Extractor)
+
+```
+data/processed/{dataset_id}/
+├── flows.csv                  # 44 feature columns, no label
+├── flows_with_labels.csv      # 44 features + label (join by run_id + flow_key)
+├── validation_report.json     # extracted-vs-GT comparison per run
+└── extraction_manifest.json   # versions, timeouts, conventions, counts
+```
+
+`flows.csv` = the 32 base NetFlow-style columns (5-tuple, timing, volume,
+rates, size stats, IAT stats, TCP flags + per-flag counts) plus 12
+PCAP-derived DNS/TLS metadata columns appended in fixed order:
+
+| Column | Type | Notes |
+|---|---|---|
+| `dns_packet_count` | int | UDP/53 packets with parseable query fragment |
+| `dns_qname_len_mean` / `dns_qname_len_max` | float / int | QNAME wire length incl. root byte |
+| `dns_qname_entropy_mean` / `dns_qname_entropy_max` | float | Shannon entropy of QNAME label bytes (bits) |
+| `dns_qtype_mode` | int | Most common query type (ties → smallest) |
+| `tls_record_count` | int | TCP/443 packets with valid record header |
+| `tls_version_mode` | int | Most common record version (e.g. 771 = 0x0303) |
+| `tls_content_type_mode` | int | Most common content type (20–23) |
+| `tls_record_len_mean` / `tls_record_len_max` | float / int | TLS *record* declared length (**not** ClientHello length) |
+| `tls_payload_entropy_mean` | float | Shannon entropy of record inner bytes (bits) |
+
+All 12 are `0`/`0.0` for non-applicable flows. No decryption is performed;
+all values come from cleartext synthetic metadata in the PCAP.
+
+**Synthetic TLS limitation (explicit):** Block 1 emits TLS-like *record
+headers only* — no real ClientHello body, no SNI, no cipher-suite/extension
+lists. JA3/JA4 fingerprints and SNI features are therefore genuinely
+impossible with the current generator and are not attempted.

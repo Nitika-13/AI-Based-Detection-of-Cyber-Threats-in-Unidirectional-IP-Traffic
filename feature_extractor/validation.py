@@ -33,6 +33,36 @@ def validate_run(
     for key in extra:
         errors.append(f"extra flow not in ground truth: {key}")
 
+    # Structural checks on PCAP-derived DNS/TLS metadata (no GT involved:
+    # the GT CSV has no DNS/TLS columns). These catch parser regressions.
+    for flow in extracted:
+        if flow.protocol == "udp" and flow.dst_port == 53:
+            if flow.dns_packet_count < 0 or flow.dns_packet_count > flow.packet_count:
+                errors.append(
+                    f"{flow.flow_key}: dns_packet_count out of range "
+                    f"({flow.dns_packet_count} vs {flow.packet_count} packets)"
+                )
+            if flow.dns_packet_count > 0 and flow.dns_qname_len_max <= 0:
+                errors.append(
+                    f"{flow.flow_key}: dns packets present but qname_len_max <= 0"
+                )
+        else:
+            if flow.dns_packet_count != 0:
+                errors.append(
+                    f"{flow.flow_key}: non-DNS flow has dns_packet_count != 0"
+                )
+        if flow.protocol == "tcp" and flow.dst_port == 443:
+            if flow.tls_record_count < 0 or flow.tls_record_count > flow.packet_count:
+                errors.append(
+                    f"{flow.flow_key}: tls_record_count out of range "
+                    f"({flow.tls_record_count} vs {flow.packet_count} packets)"
+                )
+        else:
+            if flow.tls_record_count != 0:
+                errors.append(
+                    f"{flow.flow_key}: non-TLS flow has tls_record_count != 0"
+                )
+
     matched = 0
     for key in sorted(set(gt_by_key) & set(extracted_by_key)):
         flow = extracted_by_key[key]

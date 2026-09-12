@@ -46,15 +46,18 @@ def read_pcap(path: Path) -> List[PacketRecord]:
             protocol = "tcp"
             sport, dport = int(pkt["TCP"].sport), int(pkt["TCP"].dport)
             tcp_flags = _flag_str(pkt["TCP"].flags)
+            payload = bytes(pkt["TCP"].payload)
         elif "UDP" in pkt:
             protocol = "udp"
             sport, dport = int(pkt["UDP"].sport), int(pkt["UDP"].dport)
             tcp_flags = None
+            payload = bytes(pkt["UDP"].payload)
         else:
             # ICMP (Block 1 convention: ports 0).
             protocol = "icmp"
             sport, dport = 0, 0
             tcp_flags = None
+            payload = bytes(pkt["ICMP"].payload) if "ICMP" in pkt else b""
 
         records.append(
             PacketRecord(
@@ -66,6 +69,7 @@ def read_pcap(path: Path) -> List[PacketRecord]:
                 timestamp=float(pkt.time),
                 ip_len=int(ip.len),
                 tcp_flags=tcp_flags,
+                payload=payload,
             )
         )
 

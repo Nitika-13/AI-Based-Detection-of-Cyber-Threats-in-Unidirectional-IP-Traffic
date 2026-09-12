@@ -353,3 +353,143 @@ class TestIntegration:
             assert corrupted == original
         finally:
             tmp_gt.unlink()
+
+
+# ---------------------------------------------------------------------------
+# DNS/TLS payload metadata (PCAP-derived, no decryption)
+# ---------------------------------------------------------------------------
+
+
+def _dns_payload(qname: bytes, qtype: int = 1) -> bytes:
+    """Build a Block 1-style synthetic DNS query fragment."""
+    return qname + b"\x00" + qtype.to_bytes(2, "big") + (1).to_bytes(2, "big")
+
+
+def _tls_payload(content_type=22, version=0x0303, inner_len=32) -> bytes:
+    """Build a Block 1-style synthetic TLS record."""
+    return (
+        bytes([content_type])
+        + version.to_bytes(2, "big")
+        + inner_len.to_bytes(2, "big")
+        + bytes(range(inner_len))
+    )
+
+
+class TestPayloadParsers:
+    def test_entropy_empty(self):
+        from feature_extractor.payload_features import shannon_entropy
+
+        assert shannon_entropy(b"") == 0.0
+
+    def test_entropy_constant(self):
+        from feature_extractor.payload_features import shannon_entropy
+
+        assert shannon_entropy(b"\x41" * 16) == pytest.approx(0.0)
+
+    def test_entropy_uniform(self):
+        from feature_extractor.payload_features import shannon_entropy
+
+        assert shannon_entropy(bytes(range(256))) == pytest.approx(8.0)
+
+    def test_parse_dns_benign_style(self):
+        from feature_extractor.payload_features import parse_dns_payload
+
+        parsed = parse_dns_payload(_dns_payload(b"\x03abc\x02xy", qtype=1))
+        assert parsed is not None
+        assert parsed.qname_len == (1 + 3) + (1 + 2) + 1  # labels + root
+        assert parsed.qtype == 1
+        assert parsed.qname_entropy >= 0.0
+
+    def test_parse_dns_long_qname(self):
+        from feature_extractor.payload_features import parse_dns_payload
+
+        qname = b"\x20" + b"a" * 32 + b"\x20" + b"b" * 32
+        parsed = parse_dns_payload(_dns_payload(qname, qtype=28))
+        assert parsed is not None
+        assert parsed.qtype == 28
+        assert parsed.qname_len > 40
+
+    def test_parse_dns_rejects_garbage(self):
+        from feature_extractor.payload_features import parse_dns_payload
+
+        assert parse_dns_payload(b"") is None
+        assert parse_dns_payload(b"\x01") is None
+        assert parse_dns_payload(b"\xff" + b"a" * 70) is None  # label > 63
+        assert parse_dns_payload(b"\x03abc") is None  # truncated
+
+    def test_parse_tls_record(self):
+        from feature_extractor.payload_features import parse_tls_record
+
+        parsed = parse_tls_record(_tls_payload(22, 0x0303, 32))
+        assert parsed is not None
+        assert parsed.content_type == 22
+        assert parsed.version == 0x0303
+        assert parsed.declared_len == 32
+        assert parsed.inner_entropy > 0.0
+
+    def test_parse_tls_rejects_unknown(self):
+        from feature_extractor.payload_features import parse_tls_record
+
+        assert parse_tls_record(b"") is None
+        assert parse_tls_record(b"\x16\x03") is None  # truncated
+        assert parse_tls_record(b"\x99\x03\x03\x00\x20" + b"\x00" * 32) is None
+        assert parse_tls_record(b"\x16\x04\x04\x00\x20" + b"\x00" * 32) is None
+
+    def test_mode_smallest_tiebreak(self):
+        from feature_extractor.payload_features import mode_smallest
+
+        assert mode_smallest([]) == 0
+        assert mode_smallest([28, 1, 28, 1]) == 1  # tie -> smallest
+        assert mode_smallest([15, 15, 1]) == 15
+
+
+class TestDnsTlsFeatures:
+    def _dns_pkt(self, ts, payload, dport=53):
+        return PacketRecord(
+            src_ip="10.0.0.1", src_port=1000, dst_ip="10.0.1.1",
+            dst_port=dport, protocol="udp", timestamp=ts,
+            ip_len=28 + len(payload), tcp_flags=None, payload=payload,
+        )
+
+    def _tls_pkt(self, ts, payload):
+        return PacketRecord(
+            src_ip="10.0.0.1", src_port=1000, dst_ip="10.0.1.1",
+            dst_port=443, protocol="tcp", timestamp=ts,
+            ip_len=40 + len(payload), tcp_flags="PA", payload=payload,
+        )
+
+    def test_dns_flow_features(self):
+        p1 = self._dns_pkt(1.0, _dns_payload(b"\x03abc\x02xy", qtype=1))
+        p2 = self._dns_pkt(1.1, _dns_payload(b"\x04abcd\x02xy", qtype=28))
+        flow = compute_flow_features("f0", "run_001", "dns_anomaly", [p1, p2])
+        assert flow.dns_packet_count == 2
+        assert flow.dns_qname_len_max > 0
+        assert flow.dns_qname_len_mean > 0
+        assert flow.dns_qname_entropy_mean >= 0.0
+        assert flow.dns_qtype_mode in (1, 28)
+        assert flow.tls_record_count == 0
+
+    def test_non_dns_flow_zeros(self):
+        pkts = [mk(1.0, proto="udp", sport=53, dport=53)]
+        flow = compute_flow_features("f0", "run_001", "x", pkts)
+        assert flow.dns_packet_count == 0
+        assert flow.dns_qname_len_max == 0
+        assert flow.dns_qtype_mode == 0
+
+    def test_tls_flow_features(self):
+        p1 = self._tls_pkt(1.0, _tls_payload(22, 0x0303, 32))
+        p2 = self._tls_pkt(1.1, _tls_payload(23, 0x0303, 64))
+        flow = compute_flow_features("f0", "run_001", "encrypted_anomaly", [p1, p2])
+        assert flow.tls_record_count == 2
+        assert flow.tls_version_mode == 0x0303
+        assert flow.tls_content_type_mode in (22, 23)
+        assert flow.tls_record_len_max == 64
+        assert flow.tls_payload_entropy_mean > 0.0
+        assert flow.dns_packet_count == 0
+
+    def test_non_tls_flow_zeros(self):
+        pkts = [mk(1.0, flags="PA")]
+        flow = compute_flow_features("f0", "run_001", "x", pkts)
+        assert flow.tls_record_count == 0
+        assert flow.tls_version_mode == 0
+        assert flow.tls_record_len_max == 0

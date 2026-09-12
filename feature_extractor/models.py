@@ -29,6 +29,7 @@ class PacketRecord:
     timestamp: float  # epoch seconds
     ip_len: int  # IP total length (byte-count convention)
     tcp_flags: Optional[str] = None  # Scapy flag string, e.g. "PA"; None for non-TCP
+    payload: bytes = b""  # transport-layer payload bytes (for DNS/TLS parsing)
 
     @property
     def flow_key(self) -> str:
@@ -73,6 +74,23 @@ class ExtractedFlow:
     tcp_psh_count: int
     tcp_ack_count: int
     tcp_urg_count: int
+    # DNS metadata (UDP dst port 53 with parseable payload; else zeros).
+    dns_packet_count: int = 0
+    dns_qname_len_mean: float = 0.0
+    dns_qname_len_max: int = 0
+    dns_qname_entropy_mean: float = 0.0
+    dns_qname_entropy_max: float = 0.0
+    dns_qtype_mode: int = 0
+    # TLS record metadata (TCP dst port 443 with valid record header;
+    # else zeros). NOTE: synthetic records only — no real ClientHello,
+    # no SNI, no JA3/JA4. tls_record_len_* is the TLS *record* declared
+    # length, NOT a ClientHello length.
+    tls_record_count: int = 0
+    tls_version_mode: int = 0
+    tls_content_type_mode: int = 0
+    tls_record_len_mean: float = 0.0
+    tls_record_len_max: int = 0
+    tls_payload_entropy_mean: float = 0.0
 
     def to_csv_row(self) -> dict:
         row = {}
@@ -119,4 +137,18 @@ FEATURE_COLUMNS: List[str] = [
     "tcp_psh_count",
     "tcp_ack_count",
     "tcp_urg_count",
+    # DNS metadata extension (appended; existing order preserved).
+    "dns_packet_count",
+    "dns_qname_len_mean",
+    "dns_qname_len_max",
+    "dns_qname_entropy_mean",
+    "dns_qname_entropy_max",
+    "dns_qtype_mode",
+    # TLS record metadata extension (appended; existing order preserved).
+    "tls_record_count",
+    "tls_version_mode",
+    "tls_content_type_mode",
+    "tls_record_len_mean",
+    "tls_record_len_max",
+    "tls_payload_entropy_mean",
 ]
