@@ -33,7 +33,12 @@ class GroundTruthRecord(NamedTuple):
 
 
 def read_ground_truth(csv_path: Path) -> Dict[str, GroundTruthRecord]:
-    """Read a Block 1 ground-truth CSV, keyed by flow_key."""
+    """Read a Block 1 ground-truth CSV, keyed by flow_key.
+
+    Note: each GT file belongs to a single scenario, so flow_key alone is
+    sufficient as a key. When multiple scenarios' GT rows are combined in
+    one dict (e.g. in tests), join_labels must also filter by scenario.
+    """
     records: Dict[str, GroundTruthRecord] = {}
     with open(csv_path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
@@ -58,15 +63,20 @@ def read_ground_truth(csv_path: Path) -> Dict[str, GroundTruthRecord]:
 def join_labels(
     flows: list,
     gt_by_key: Dict[str, GroundTruthRecord],
+    scenario: str = "",
 ) -> List[dict]:
-    """Join extracted flows with GT labels by flow_key.
+    """Join extracted flows with GT labels by (flow_key, scenario).
 
-    Returns rows of {feature columns..., label}. Flows without a GT match
-    get label="" (reported by validation instead of failing silently).
+    When ``scenario`` is given, only GT rows matching that scenario are
+    considered — this prevents a flow from being labeled by another
+    scenario's GT row when multiple scenarios share the same flow_key
+    (e.g. when the same run_id is reused across scenarios).
     """
     rows: List[dict] = []
     for flow in flows:
         gt: Optional[GroundTruthRecord] = gt_by_key.get(flow.flow_key)
+        if gt is not None and scenario and gt.scenario != scenario:
+            gt = None
         row = flow.to_csv_row()
         row["label"] = gt.label if gt else ""
         rows.append(row)

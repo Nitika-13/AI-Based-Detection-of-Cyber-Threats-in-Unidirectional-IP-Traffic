@@ -43,7 +43,7 @@ def extract_run(
         )
         for flow_packets in raw_flows
     ]
-    return assign_flow_ids(flows, run_id)
+    return assign_flow_ids(flows, run_id, scenario)
 
 
 def run_extraction(config: ExtractorConfig) -> Dict:
@@ -86,11 +86,17 @@ def run_extraction(config: ExtractorConfig) -> Dict:
     write_flows_csv(out_dir / "flows.csv", all_flows)
 
     # Labeled convenience file: join labels per run.
+    # Filter by BOTH run_id AND scenario so that when multiple manifest
+    # entries reuse the same run_id (e.g. all Block 1 runs use
+    # run_id="run_001"), each scenario only receives its own flows.
     labeled_rows: List[Dict] = []
     for run in runs:
-        run_flows = [f for f in all_flows if f.run_id == run["run_id"]]
+        run_flows = [
+            f for f in all_flows
+            if f.run_id == run["run_id"] and f.scenario == run["scenario"]
+        ]
         gt_by_key = read_ground_truth(dataset_dir / run["labels"])
-        labeled_rows.extend(join_labels(run_flows, gt_by_key))
+        labeled_rows.extend(join_labels(run_flows, gt_by_key, scenario=run["scenario"]))
     write_labeled_csv(out_dir / "flows_with_labels.csv", labeled_rows)
 
     overall_status = (
@@ -114,7 +120,7 @@ def run_extraction(config: ExtractorConfig) -> Dict:
         "active_timeout_seconds": config.active_timeout,
         "byte_count_convention": "ip_total_length",
         "std_deviation": "population (ddof=0)",
-        "flow_id_rule": "{run_id}__{seq:04d} sorted by (start_ts, flow_key)",
+        "flow_id_rule": "{scenario}__{run_id}__{seq:04d} sorted by (start_ts, flow_key)",
         "join_key": "(run_id, flow_key)",
         "feature_columns": FEATURE_COLUMNS,
         "total_flows": len(all_flows),

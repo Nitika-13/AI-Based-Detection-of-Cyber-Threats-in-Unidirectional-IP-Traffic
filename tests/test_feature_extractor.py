@@ -180,10 +180,96 @@ class TestFeatureComputation:
         pkts_b = [mk(1.0, sport=2)]
         fa = compute_flow_features("", "run_001", "x", pkts_a)
         fb = compute_flow_features("", "run_001", "x", pkts_b)
-        ordered = assign_flow_ids([fa, fb], "run_001")
-        assert ordered[0].flow_id == "run_001__0000"
-        assert ordered[1].flow_id == "run_001__0001"
+        ordered = assign_flow_ids([fa, fb], "run_001", "x")
+        assert ordered[0].flow_id == "x__run_001__0000"
+        assert ordered[1].flow_id == "x__run_001__0001"
         assert ordered[0].src_port == 2  # earlier start_ts first
+
+    def test_flow_id_global_uniqueness_across_scenarios(self):
+        """Same run_id reused across scenarios must still produce unique IDs."""
+        pkts_a = [mk(1.0, sport=1)]
+        pkts_b = [mk(1.0, sport=2)]
+        fa = compute_flow_features("", "run_001", "ddos", pkts_a)
+        fb = compute_flow_features("", "run_001", "c2_beacon", pkts_b)
+        # Process ddos flows first (they get ddos-scoped IDs).
+        ordered = assign_flow_ids([fa, fb], "run_001", "ddos")
+        assert ordered[0].flow_id == "ddos__run_001__0000"
+        assert ordered[1].flow_id == "ddos__run_001__0001"
+        assert ordered[0].scenario == "ddos"
+        assert ordered[1].scenario == "c2_beacon"
+
+    def test_join_labels_scenario_filter(self, tmp_path):
+        """join_labels with scenario filter must only match GT rows of that scenario.
+
+        This mirrors real usage: each scenario has its own GT file, and
+        join_labels is called with that scenario so a flow cannot be labeled
+        by another scenario's GT row when flow_keys collide.
+        """
+        import csv
+
+        gt_path = tmp_path / "gt.csv"
+        cols = [
+            "flow_id", "run_id", "scenario", "label", "src_ip", "src_port",
+            "dst_ip", "dst_port", "protocol", "flow_key", "start_ts",
+            "end_ts", "duration", "packet_count", "byte_count", "tcp_flags",
+        ]
+        with open(gt_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=cols)
+            writer.writeheader()
+            writer.writerow({
+                "flow_id": "f0", "run_id": "run_001", "scenario": "ddos",
+                "label": "ddos",
+                "src_ip": "10.0.0.1", "src_port": "1000",
+                "dst_ip": "10.0.1.1", "dst_port": "80", "protocol": "tcp",
+                "flow_key": make_flow_key("10.0.0.1", 1000, "10.0.1.1", 80, "tcp"),
+                "start_ts": "1.0", "end_ts": "2.0", "duration": "1.0",
+                "packet_count": "2", "byte_count": "140", "tcp_flags": "S,PA",
+            })
+            writer.writerow({
+                "flow_id": "f1", "run_id": "run_001", "scenario": "c2_beacon",
+                "label": "c2_beacon",
+                "src_ip": "10.0.0.2", "src_port": "2000",
+                "dst_ip": "10.0.1.1", "dst_port": "443", "protocol": "tcp",
+                "flow_key": make_flow_key("10.0.0.2", 2000, "10.0.1.1", 443, "tcp"),
+                "start_ts": "1.0", "end_ts": "2.0", "duration": "1.0",
+                "packet_count": "2", "byte_count": "140", "tcp_flags": "A,P,S",
+            })
+
+        gt_by_key = read_ground_truth(gt_path)
+        # Two flows with the SAME run_id but different scenarios.
+        fa = compute_flow_features("", "run_001", "ddos", [
+            mk(1.0, ip_len=40, flags="S"),
+            mk(1.5, ip_len=100, flags="PA"),
+        ])
+        fb = compute_flow_features("", "run_001", "c2_beacon", [
+            mk(1.0, src="10.0.0.2", sport=2000, dst="10.0.1.1", dport=443, ip_len=40, flags="PA"),
+            mk(1.5, src="10.0.0.2", sport=2000, dst="10.0.1.1", dport=443, ip_len=100, flags="PA"),
+        ])
+        # Assign flow_ids (as the extractor does) before joining.
+        flows = assign_flow_ids([fa, fb], "run_001", "ddos")
+
+        # Without scenario filter, both flows match their respective GT rows
+        # because read_ground_truth keys by flow_key only and the two flows
+        # have different flow_keys.
+        rows_no_filter = join_labels(flows, gt_by_key)
+        assert rows_no_filter[0]["label"] == "ddos"
+        assert rows_no_filter[1]["label"] == "c2_beacon"
+
+        # With scenario="ddos" filter, only the ddos flow gets a label;
+        # the c2_beacon flow gets "" because its scenario doesn't match.
+        rows_ddos = join_labels(flows, gt_by_key, scenario="ddos")
+        assert rows_ddos[0]["label"] == "ddos"
+        assert rows_ddos[1]["label"] == ""
+
+        # With scenario="c2_beacon" filter, only the c2_beacon flow gets a label.
+        rows_c2 = join_labels(flows, gt_by_key, scenario="c2_beacon")
+        assert rows_c2[0]["label"] == ""
+        assert rows_c2[1]["label"] == "c2_beacon"
+
+        # flow_ids are scenario-scoped and unique.
+        assert rows_no_filter[0]["flow_id"].startswith("ddos__")
+        assert rows_no_filter[1]["flow_id"].startswith("ddos__")
+        assert rows_no_filter[0]["flow_id"] != rows_no_filter[1]["flow_id"]
 
 
 # ---------------------------------------------------------------------------

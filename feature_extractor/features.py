@@ -164,10 +164,16 @@ def compute_flow_features(
 
 
 def assign_flow_ids(
-    flows: List[ExtractedFlow], run_id: str
+    flows: List[ExtractedFlow], run_id: str, scenario: str
 ) -> List[ExtractedFlow]:
-    """Assign deterministic flow_ids: sorted by (start_ts, flow_key)."""
+    """Assign deterministic, globally-unique flow_ids.
+
+    Format: ``{scenario}__{run_id}__{seq:04d}`` sorted by (start_ts, flow_key).
+    Scoping by scenario makes flow_ids globally unique even when multiple
+    manifest entries reuse the same run_id (e.g. all Block 1 runs use
+    run_id="run_001").
+    """
     ordered = sorted(flows, key=lambda f: (f.start_ts, f.flow_key))
     for seq, flow in enumerate(ordered):
-        flow.flow_id = f"{run_id}__{seq:04d}"
+        flow.flow_id = f"{scenario}__{run_id}__{seq:04d}"
     return ordered
