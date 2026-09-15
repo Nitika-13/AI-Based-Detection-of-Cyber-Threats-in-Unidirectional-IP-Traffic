@@ -57,6 +57,7 @@ def generate_dataset(
         },
     )
     if split_ratios is not None:
+
         kwargs["split_ratios"] = split_ratios
     TrafficGenerator(GeneratorConfig(**kwargs)).generate()
     return Path(outdir) / dataset_id

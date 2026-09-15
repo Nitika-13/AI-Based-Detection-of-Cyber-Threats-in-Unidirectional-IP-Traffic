@@ -1,6 +1,14 @@
 """Run-level train/validation/test splitting for the generated dataset.
 
 Splitting is deliberately done at the RUN level, not at the packet or flow
+from __future__ import annotations
+
+import math
+from typing import Dict, List, Mapping, Sequence
+
+from .config import SPLIT_NAMES
+
+
 level. All captures generated from one run share the same global seed and the
 same scenario parameters, and their flows are only small random variations of
 each other. Putting half of one run into training and the other half into
@@ -28,7 +36,8 @@ split that is frozen across dataset regenerations.
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Mapping, Sequence
+from collections import defaultdict
+from typing import Dict, List, Mapping, Sequence, Tuple
 
 from .config import SPLIT_NAMES
 
@@ -160,11 +169,123 @@ def assert_no_run_leakage(splits: Mapping[str, str]) -> None:
             raise ValueError(
                 f"Run '{run_id}' appears in splits '{seen[run_id]}' and '{split}'"
             )
-        seen[run_id] = split
+
+def assign_group_splits(
+    groups: Sequence[Tuple[str, str]],
+    ratios: Mapping[str, float] | None = None,
+    overrides: Mapping[str, str] | None = None,
+) -> Dict[str, str]:
+    """Assign each generation group to a split, keeping the group intact.
+
+    ``groups`` is ordered and contains ``(generation_group_id, run_id)`` pairs
+    for every capture. All captures sharing the same ``generation_group_id`` are
+    treated as a single atomic unit: they are all assigned to the same split, or
+    the function raises.
+
+    Raises:
+        ValueError: if captures from the same generation group are assigned to
+            more than one split, or if overrides are inconsistent with the group.
+    """
+
+    from .config import DEFAULT_SPLIT_RATIOS
+
+    ratios = dict(ratios if ratios is not None else DEFAULT_SPLIT_RATIOS)
+    overrides = dict(overrides or {})
+
+    unknown = set(ratios) - set(SPLIT_NAMES)
+    if unknown:
+        raise ValueError(f"Unknown split name(s) {sorted(unknown)}; expected {SPLIT_NAMES}")
+    total_ratio = sum(ratios.values())
+    if total_ratio <= 0:
+        raise ValueError("Split ratios must sum to a positive value")
+    ratios = {name: value / total_ratio for name, value in ratios.items()}
+
+    # Group captures by generation_group_id, preserving first-seen order.
+    group_order: List[str] = []
+    group_run_ids: Dict[str, List[str]] = defaultdict(list)
+    for group_id, run_id in groups:
+        if group_id not in group_run_ids:
+            group_order.append(group_id)
+        group_run_ids[group_id].append(run_id)
+
+    group_splits: Dict[str, str] = {}
+
+    # Apply overrides at the group level: every capture from an overridden group
+    # must agree on the same split, otherwise the group is internally split.
+    for group_id, run_ids_for_group in group_run_ids.items():
+        overrides_for_group = {rid: overrides[rid] for rid in run_ids_for_group if rid in overrides}
+        if overrides_for_group:
+            if len(set(overrides_for_group.values())) > 1:
+                raise ValueError(
+                    f"Generation group '{group_id}' contains captures assigned to "
+                    f"different splits via overrides: {overrides_for_group}"
+                )
+            group_splits[group_id] = next(iter(overrides_for_group.values()))
+
+    free_groups = [g for g in group_order if g not in group_splits]
+    counts = _allocate_counts(len(free_groups), ratios)
+
+    cursor = 0
+    for name in SPLIT_NAMES:
+        for _ in range(counts.get(name, 0)):
+            group_splits[free_groups[cursor]] = name
+            cursor += 1
+
+    # Expand group assignments to every capture.
+    capture_splits: Dict[str, str] = {}
+    for group_id, run_id in groups:
+        if group_id not in group_splits:
+            raise ValueError(f"Generation group '{group_id}' was not assigned a split")
+        capture_splits[run_id] = group_splits[group_id]
+
+    # Ensure overrides are still honoured.
+    capture_splits.update(overrides)
+    return capture_splits
+
+
+def group_to_run_splits(
+    groups: Sequence[Tuple[str, str]],
+) -> Dict[str, str]:
+    """Return the generation_group_id for every run_id, based on the group order.
+
+    This is a helper for manifest/reporting paths that already have per-capture
+    ``(generation_group_id, run_id)`` pairs and want a run_id -> group mapping.
+    """
+
+    group_of: Dict[str, str] = {}
+    for group_id, run_id in groups:
+        group_of[run_id] = group_id
+    return group_of
+
+
+def assert_no_group_leakage(
+    splits: Mapping[str, str],
+    groups: Mapping[str, str],
+) -> None:
+    """Raise if any generation group appears in more than one split.
+
+    ``splits`` maps run_id -> split.
+    ``groups`` maps run_id -> generation_group_id.
+    """
+
+    group_split: Dict[str, str] = {}
+    for run_id, split in splits.items():
+        if split not in SPLIT_NAMES:
+            raise ValueError(f"Unknown split '{split}' for run '{run_id}'")
+        group_id = groups[run_id]
+        if group_id in group_split and group_split[group_id] != split:
+            raise ValueError(
+                f"Generation group '{group_id}' spans splits '{group_split[group_id]}' "
+                f"and '{split}' via run '{run_id}'"
+            )
+        group_split[group_id] = split
 
 
 __all__ = [
     "assign_run_splits",
-    "split_summary",
+    "assign_group_splits",
+    "group_to_run_splits",
     "assert_no_run_leakage",
+    "assert_no_group_leakage",
+    "split_summary",
 ]

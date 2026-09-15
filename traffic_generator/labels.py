@@ -65,6 +65,7 @@ def write_metadata_json(
     difficulty: str = "",
     metadata_file: str = "",
     generation_params: dict | None = None,
+    generation_group_id: str = "",
 ) -> None:
     """Write the per-run metadata JSON.
 
@@ -96,6 +97,8 @@ def write_metadata_json(
         "ip_ranges": ip_ranges,
         "notes": notes,
     }
+    if generation_group_id:
+        metadata["generation_group_id"] = generation_group_id
     with open(path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
         f.write("\n")

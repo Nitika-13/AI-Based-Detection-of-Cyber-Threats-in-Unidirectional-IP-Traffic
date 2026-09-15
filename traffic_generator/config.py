@@ -1,6 +1,9 @@
 """Configuration dataclasses for the traffic generator."""
 
 from __future__ import annotations
+from collections.abc import Sequence
+from typing import List, Optional, Sequence as _Sequence, Tuple
+
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -129,3 +132,36 @@ class GeneratorConfig:
             difficulty=self.difficulty_for(name),
             params=params,
         )
+def build_grouped_run_ids(
+    scenarios: Sequence[str],
+    runs_per_group: int,
+    *,
+    prefix: str = "grp",
+) -> List[Tuple[str, str, str]]:
+    """Return a deterministic list of (group_id, run_id, scenario) triples.
+
+    Each ``group_id`` is one independent generation group. All scenarios in the
+    same group share the same global seed and run index, so they are related
+    captures that must NEVER be split across train/val/test.
+
+    ``run_id`` is still the per-capture scheduling identity (used for manifest
+    ``run_id`` / Block 1 metadata), but it is NOT the grouping unit any more.
+    ``scenario`` is the per-capture traffic mix.
+
+    This helper is purely for dataset/workflow construction. The splitter
+    operates on the explicit ``group_id -> split`` mapping, not on run_id.
+    """
+
+    scenarios = list(scenarios)
+    if not scenarios:
+        return []
+
+    # Deterministic group ids from the scenario list so fixtures are stable.
+    groups: List[Tuple[str, str, str]] = []
+    for group_index, scenario in enumerate(scenarios):
+        group_id = f"{prefix}_{group_index:03d}"
+        for run_offset in range(runs_per_group):
+            run_index = group_index * runs_per_group + run_offset
+            run_id = f"run_{run_index:03d}"
+            groups.append((group_id, run_id, scenario))
+    return groups

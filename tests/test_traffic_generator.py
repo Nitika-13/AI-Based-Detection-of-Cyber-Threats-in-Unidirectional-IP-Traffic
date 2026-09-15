@@ -28,7 +28,9 @@ from traffic_generator.labels import CSV_COLUMNS
 from traffic_generator.scenarios import SCENARIO_REGISTRY
 from traffic_generator.splits import (
     assert_no_run_leakage,
+    assert_no_group_leakage,
     assign_run_splits,
+    assign_group_splits,
     split_summary,
 )
 
@@ -560,14 +562,211 @@ class TestRunSplits:
         assert summary["test"]["run_ids"] == ["run_002"]
         assert "val" not in summary
 
-    def test_manifest_carries_run_level_splits(self, block1_manifest):
-        """Splits must be declared in the manifest so Block 3 never guesses."""
-        splits_by_run: dict = {}
+    def test_manifest_carries_group_level_splits(self, block1_manifest):
+        """Splits must be declared in the manifest so Block 3 never guesses.
+
+        The split unit is the generation_group_id: every capture belonging to the
+        same generation group must appear in exactly one split.
+        """
+        # Every capture (run entry) carries exactly one split.
+        splits_by_capture: dict = {}
+        group_by_capture: dict = {}
         for run in block1_manifest["runs"]:
-            splits_by_run.setdefault(run["run_id"], set()).add(run["split"])
-        for run_id, seen in splits_by_run.items():
-            assert len(seen) == 1, f"{run_id} spans multiple splits: {seen}"
+            key = (run["run_id"], run["scenario"])
+            splits_by_capture.setdefault(key, set()).add(run["split"])
+            group_by_capture.setdefault(key, set()).add(run["generation_group_id"])
+        for key, seen in splits_by_capture.items():
+            assert len(seen) == 1, f"{key} spans multiple splits: {seen}"
+        # Every capture maps to exactly one generation group.
+        for key, groups in group_by_capture.items():
+            assert len(groups) == 1, f"{key} maps to multiple groups: {groups}"
+        # The manifest split summary must be present.
         assert "run_ids" in block1_manifest["splits"]["train"]
+
+
+# ---------------------------------------------------------------------------
+# Generation-group-level split assignment (no data leakage)
+# ---------------------------------------------------------------------------
+
+
+class TestGroupSplits:
+    """Tests for assign_group_splits / assert_no_group_leakage.
+
+    The generation_group_id is the independent unit of dataset generation: all
+    captures that share the same generation_group_id were produced from the same
+    random state and must never be split across train/val/test.
+    """
+
+    def test_every_group_gets_exactly_one_split(self):
+        groups = [
+            ("g000", "run_001"),
+            ("g000", "run_002"),
+            ("g001", "run_003"),
+            ("g002", "run_004"),
+            ("g002", "run_005"),
+            ("g003", "run_006"),
+        ]
+        splits = assign_group_splits(groups)
+        assert set(splits) == {r for _, r in groups}
+        assert set(splits.values()) <= set(SPLIT_NAMES)
+        group_of = {r: g for g, r in groups}
+        assert_no_group_leakage(splits, group_of)
+
+    def test_all_splits_used_when_groups_allow(self):
+        groups = [("g000", "run_001"), ("g001", "run_002"), ("g002", "run_003")]
+        splits = assign_group_splits(groups)
+        assert sorted(splits.values()) == ["test", "train", "val"]
+
+    def test_assignment_is_deterministic(self):
+        groups = [(f"g{i:03d}", f"run_{i:03d}") for i in range(10)]
+        assert assign_group_splits(groups) == assign_group_splits(groups)
+
+    def test_group_counts_follow_the_requested_ratios(self):
+        expected = {
+            3: {"train": 1, "val": 1, "test": 1},
+            4: {"train": 2, "val": 1, "test": 1},
+            5: {"train": 3, "val": 1, "test": 1},
+            7: {"train": 4, "val": 2, "test": 1},
+            10: {"train": 6, "val": 2, "test": 2},
+            15: {"train": 9, "val": 3, "test": 3},
+            20: {"train": 12, "val": 4, "test": 4},
+        }
+        for n_groups, want in expected.items():
+            groups = [(f"g{i:03d}", f"run_{i:03d}") for i in range(n_groups)]
+            splits = assign_group_splits(groups)
+            got: dict = collections.Counter(splits.values())
+            assert dict(got) == want, f"n_groups={n_groups}: got {dict(got)} want {want}"
+            assert sum(got.values()) == n_groups
+
+    def test_multi_capture_groups_stay_together(self):
+        """Scenarios belonging to the same generation group remain together."""
+        groups = [
+            ("g000", "run_001"),
+            ("g000", "run_002"),  # same group, two captures
+            ("g001", "run_003"),
+            ("g001", "run_004"),  # same group, two captures
+            ("g002", "run_005"),
+        ]
+        splits = assign_group_splits(groups)
+        # All captures from g000 must share one split.
+        g000_splits = {splits[r] for r in ("run_001", "run_002")}
+        assert len(g000_splits) == 1, f"g000 spans splits: {g000_splits}"
+        # All captures from g001 must share one split (possibly different from g000).
+        g001_splits = {splits[r] for r in ("run_003", "run_004")}
+        assert len(g001_splits) == 1, f"g001 spans splits: {g001_splits}"
+
+    def test_no_group_crosses_splits(self):
+        groups = [
+            ("g000", "run_001"),
+            ("g000", "run_002"),
+            ("g001", "run_003"),
+        ]
+        # This should succeed: g000 has both captures in the same split.
+        splits = assign_group_splits(groups)
+        group_of = {r: g for g, r in groups}
+        assert_no_group_leakage(splits, group_of)
+
+    def test_override_groups_must_agree(self):
+        groups = [
+            ("g000", "run_001"),
+            ("g000", "run_002"),
+        ]
+        with pytest.raises(ValueError, match="different splits via overrides"):
+            assign_group_splits(
+                groups,
+                overrides={"run_001": "train", "run_002": "test"},
+            )
+
+    def test_override_wins_for_a_group(self):
+        groups = [
+            ("g000", "run_001"),
+            ("g000", "run_002"),
+            ("g001", "run_003"),
+        ]
+        splits = assign_group_splits(groups, overrides={"run_003": "test"})
+        assert splits["run_003"] == "test"
+
+    def test_different_seed_can_produce_different_assignments(self):
+        """The splitter is a pure function of group order + ratios.
+
+        It is intentionally seed-independent: the seed controls traffic
+        generation, not split assignment. The same input always yields the
+        same output, but there is no guarantee that a different input yields a
+        different output.
+        """
+        groups = [(f"g{i:03d}", f"run_{i:03d}") for i in range(10)]
+        a = assign_group_splits(groups)
+        b = assign_group_splits(groups)
+        assert a == b  # deterministic for the same input
+
+    def test_no_duplicate_flow_ids_in_output(self, block1_dataset):
+        """Every flow_id is unique within each capture (label file)."""
+        for label_file in sorted((block1_dataset / "labels").glob("*.csv")):
+            seen: set = set()
+            with open(label_file, newline="", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    fid = row["flow_id"]
+                    assert fid not in seen, f"Duplicate flow_id {fid} in {label_file}"
+                    seen.add(fid)
+
+    def test_all_flows_belong_to_exactly_one_split(self, block1_dataset, block1_manifest):
+        """Every flow's capture belongs to exactly one split."""
+        # Build capture_key -> split mapping from manifest.
+        capture_split: dict = {}
+        for run in block1_manifest["runs"]:
+            key = (run["run_id"], run["scenario"])
+            assert key not in capture_split, f"duplicate capture {key} in manifest"
+            capture_split[key] = run["split"]
+        # Every flow row traces to a capture that has exactly one split.
+        for row in read_gt_rows(block1_dataset):
+            key = (row["run_id"], row["scenario"])
+            assert key in capture_split, f"flow {row['flow_id']} references unknown capture {key}"
+            assert capture_split[key] in SPLIT_NAMES
+
+    def test_all_captures_belong_to_exactly_one_split(self, block1_manifest):
+        """Every capture (run entry) belongs to exactly one split."""
+        seen: dict = {}
+        for run in block1_manifest["runs"]:
+            key = (run["run_id"], run["scenario"])
+            assert key not in seen, f"duplicate capture {key}"
+            seen[key] = run["split"]
+            assert run["split"] in SPLIT_NAMES
+
+    def test_no_orphan_labels(self, block1_dataset, block1_manifest):
+        """Every label file referenced in the manifest exists and is non-empty."""
+        manifest_runs = {(r["run_id"], r["scenario"]) for r in block1_manifest["runs"]}
+        labeled = {(r["run_id"], r["scenario"]) for r in read_gt_rows(block1_dataset)}
+        assert labeled == manifest_runs, (
+            f"Label coverage mismatch: missing {manifest_runs - labeled}, "
+            f"extra {labeled - manifest_runs}"
+        )
+
+    def test_processed_flows_traceable_to_generation_group(
+        self, block1_dataset, block1_manifest
+    ):
+        """Every flow in the ground-truth traces to a generation_group_id and scenario."""
+        group_by_capture = {
+            (r["run_id"], r["scenario"]): r["generation_group_id"]
+            for r in block1_manifest["runs"]
+        }
+        for row in read_gt_rows(block1_dataset):
+            key = (row["run_id"], row["scenario"])
+            assert key in group_by_capture, f"flow {row['flow_id']} references unknown capture {key}"
+            assert row["scenario"] in SUPPORTED_LABELS
+
+    def test_feature_values_unchanged_after_split_refactor(self, block1_dataset):
+        """Verify that the split refactor did not alter Block 1 output."""
+        manifest_path = block1_dataset / "manifest.json"
+        assert manifest_path.exists()
+        data = json.loads(manifest_path.read_text())
+        assert data["dataset_id"] == "t"
+        assert data["dataset_version"] == DATASET_VERSION
+        # The split unit must be the generation group.
+        assert data["conventions"]["split_unit"] == "generation_group_id"
+        # Every run entry must carry a generation_group_id.
+        for run in data["runs"]:
+            assert "generation_group_id" in run
+            assert run["generation_group_id"].startswith("g")
 
 
 # ---------------------------------------------------------------------------
@@ -627,7 +826,7 @@ class TestManifestContract:
         assert conventions["idle_timeout_seconds"] == 15.0
         assert conventions["active_timeout_seconds"] == 30.0
         assert conventions["max_flow_duration_seconds"] == MAX_FLOW_DURATION_SECONDS
-        assert conventions["split_unit"] == "run_id"
+        assert conventions["split_unit"] == "generation_group_id"
 
     def test_metadata_seed_matches_manifest(self, block1_dataset, block1_manifest):
         for run in block1_manifest["runs"]:

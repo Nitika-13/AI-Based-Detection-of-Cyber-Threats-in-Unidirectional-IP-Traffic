@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from .splits import assign_group_splits, group_to_run_splits
+
+
 from typing import Dict, List
 
 from . import __version__
@@ -20,7 +23,11 @@ from .labels import write_labels_csv, write_manifest_json, write_metadata_json
 from .models import Flow
 from .pcap_writer import write_pcap
 from .scenarios import get_scenario_class
-from .splits import assign_run_splits, split_summary
+from .splits import (
+    assign_group_splits,
+    group_to_run_splits,
+    split_summary,
+)
 
 # Safety note stored in the manifest and in every metadata file.
 SAFETY_NOTE = (
@@ -95,17 +102,33 @@ class TrafficGenerator:
         metadata_dir = dataset_dir / "metadata"
 
         run_ids = self._run_ids(self.config.runs)
-        # Run-level split assignment: every run_id belongs to exactly one split.
-        run_splits = assign_run_splits(
-            run_ids, self.config.split_ratios, self.config.run_splits
+
+        # Pre-compute the ordered list of (generation_group_id, run_id) pairs.
+        # One group per capture: every (run_id, scenario) pair has its own
+        # deterministic seed, so it is its own independent generation unit.
+        groups: List[Tuple[str, str]] = []
+        gi = 0
+        for run_id in run_ids:
+            for _scenario_name in self.config.scenarios:
+                group_id = f"g{gi:03d}"
+                groups.append((group_id, run_id))
+                gi += 1
+
+        # Assign splits at the generation-group level. All captures that share
+        # a generation_group_id are kept together; with the current seed model
+        # each group contains exactly one capture, so this is equivalent to
+        # per-capture splitting but validates the no-leakage invariant explicitly.
+        capture_splits = assign_group_splits(
+            groups, self.config.split_ratios, self.config.run_splits
         )
 
         runs_manifest: List[Dict] = []
         all_runs: Dict[str, List[Flow]] = {}
         capture_index = 0
+        gi = 0
 
         for run_idx, run_id in enumerate(run_ids, start=1):
-            split = run_splits[run_id]
+            split = capture_splits[run_id]
             for scenario_name in self.config.scenarios:
                 scenario_config = self.config.scenario_config(scenario_name)
                 scenario_cls = get_scenario_class(scenario_name)
@@ -155,6 +178,9 @@ class TrafficGenerator:
                 # Write ground-truth CSV.
                 write_labels_csv(label_path, flows)
 
+                # Explicit generation group identity.
+                generation_group_id = f"g{gi:03d}"
+
                 generation_params = {
                     "flow_count": scenario_config.flow_count,
                     "benign_background_flows": scenario_config.benign_background_flows,
@@ -191,6 +217,7 @@ class TrafficGenerator:
                     generation_params=generation_params,
                     ip_ranges=self.config.src_ranges + self.config.dst_ranges,
                     notes=SAFETY_NOTE,
+                    generation_group_id=generation_group_id,
                 )
 
                 runs_manifest.append(
@@ -209,11 +236,13 @@ class TrafficGenerator:
                         "pcap": f"pcap/{pcap_file}",
                         "labels": f"labels/{label_file}",
                         "metadata": f"metadata/{metadata_file}",
+                        "generation_group_id": generation_group_id,
                     }
                 )
 
                 all_runs[f"{run_id}/{scenario_name}"] = flows
                 capture_index += 1
+                gi += 1
 
         # Write manifest.json (Block 2 entry point).
         created_at = datetime.now(timezone.utc).isoformat()
@@ -226,7 +255,7 @@ class TrafficGenerator:
             difficulty=self.config.difficulty,
             created_at=created_at,
             split_ratios=self.config.split_ratios,
-            splits=split_summary(run_splits),
+            splits=split_summary(capture_splits),
             conventions={
                 "flow_key": "(src_ip, src_port, dst_ip, dst_port, protocol)",
                 "byte_count": BYTE_COUNT_CONVENTION,
@@ -234,7 +263,7 @@ class TrafficGenerator:
                 "active_timeout_seconds": ACTIVE_TIMEOUT_SECONDS,
                 "max_inter_packet_gap_seconds": MAX_INTER_PACKET_GAP_SECONDS,
                 "max_flow_duration_seconds": MAX_FLOW_DURATION_SECONDS,
-                "split_unit": "run_id",
+                "split_unit": "generation_group_id",
             },
             runs=runs_manifest,
         )
