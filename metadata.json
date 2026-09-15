@@ -1,0 +1,6 @@
+{
+  "name": "AI Cyber Threat Detection in Unidirectional IP Traffic",
+  "description": "Passive unidirectional network sensor, NetFlow feature extraction, and AI/ML threat detection for synthetic IP traffic across 7 cyber attack scenarios (SIH 26145).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
