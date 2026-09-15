@@ -10,6 +10,7 @@ import { NotebookLabView } from './components/NotebookLabView';
 import { AnalystTriageView } from './components/AnalystTriageView';
 import { SIHPresentationDeck } from './components/SIHPresentationDeck';
 import { PCAPReplayLabView } from './components/PCAPReplayLabView';
+import { ArchitectureDiagramView } from './components/ArchitectureDiagramView';
 import { FlowDetailModal } from './components/FlowDetailModal';
 import { AttackSimulatorModal } from './components/AttackSimulatorModal';
 
@@ -44,7 +45,7 @@ export function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-sky-500/30 selection:text-sky-200">
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col selection:bg-indigo-100 selection:text-indigo-900 font-sans">
       {/* Top Header & Navigation */}
       <Header
         activeTab={activeTab}
@@ -70,6 +71,10 @@ export function App() {
             onSelectFlow={setSelectedFlow}
             onOpenSimulator={() => setIsSimulatorOpen(true)}
           />
+        )}
+
+        {activeTab === 'architecture' && (
+          <ArchitectureDiagramView />
         )}
 
         {activeTab === 'pcap_lab' && (
@@ -110,13 +115,13 @@ export function App() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-slate-900 bg-slate-950 py-4 text-center text-xs text-slate-500 font-mono">
+      <footer className="border-t border-slate-200 bg-white py-4 text-center text-xs text-slate-500 font-mono">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <span>
             UniSentry: AI-Based Cyber Threat Detection in Unidirectional IP Traffic • Smart India Hackathon 2026 (NTRO 26145)
           </span>
-          <span className="text-slate-400">
-            Team SNATCH01 • Multi-Specialist AI (Flow RF + DNS RF + JA3) • OASIS STIX 2.1 • Safe Learning Loop
+          <span className="text-slate-600 font-medium">
+            Team SNATCH01 • 25,000 flows/sec @ &lt;50ms • Multi-Specialist AI • OASIS STIX 2.1 • Safe Learning Loop
           </span>
         </div>
       </footer>

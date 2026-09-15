@@ -75,6 +75,14 @@ export interface FlowRecord {
   correlated_incident_id?: string;
 }
 
+export interface StructuredThreatAlert {
+  timestamp: string;
+  flow_id: string; // e.g. "192.168.1.50 -> 10.0.0.1 (UDP/53)"
+  threat_type: string; // e.g. "DNS Tunnelling / DGA"
+  confidence_score: number; // e.g. 0.94
+  supporting_evidence: Record<string, string | number>;
+}
+
 export interface STIXAlert {
   type: 'indicator';
   spec_version: '2.1';
