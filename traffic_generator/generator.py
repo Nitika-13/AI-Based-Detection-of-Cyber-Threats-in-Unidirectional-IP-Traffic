@@ -4,10 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from .splits import assign_group_splits, group_to_run_splits
-
-
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from . import __version__
 from .config import (
@@ -24,6 +21,7 @@ from .models import Flow
 from .pcap_writer import write_pcap
 from .scenarios import get_scenario_class
 from .splits import (
+    assert_no_group_leakage,
     assign_group_splits,
     group_to_run_splits,
     split_summary,

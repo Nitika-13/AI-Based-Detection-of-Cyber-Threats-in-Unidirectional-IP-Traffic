@@ -113,6 +113,8 @@ class GeneratorConfig:
     )
     # Explicit run_id -> split override; wins over split_ratios when set.
     run_splits: Dict[str, str] = field(default_factory=dict)
+    # Optional random seed for deterministic grouped splitting permutations.
+    split_seed: Optional[int] = None
 
     def difficulty_for(self, name: str) -> str:
         """Return the difficulty to use for the given scenario name."""

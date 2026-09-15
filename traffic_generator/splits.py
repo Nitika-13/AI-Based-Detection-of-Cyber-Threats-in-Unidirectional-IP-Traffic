@@ -1,41 +1,7 @@
-"""Run-level train/validation/test splitting for the generated dataset.
-
-Splitting is deliberately done at the RUN level, not at the packet or flow
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Mapping, Sequence
-
-from .config import SPLIT_NAMES
-
-
-level. All captures generated from one run share the same global seed and the
-same scenario parameters, and their flows are only small random variations of
-each other. Putting half of one run into training and the other half into
-testing would therefore leak near-identical traffic across the split boundary
-and make evaluation meaningless.
-
-Rules implemented here:
-
-* every ``run_id`` is assigned to exactly one split ("train" / "val" / "test");
-* the assignment is a pure function of the ordered run list and the requested
-  ratios, so it is fully reproducible for a fixed number of runs;
-* an explicit ``overrides`` mapping always wins, so a specific split can be
-  frozen (recommended for a demo or for comparing two model versions);
-* assignment is contiguous (runs 1..k -> train, then val, then test) and every
-  requested split receives at least one run once there are enough runs, so a
-  3-run dataset yields a usable train/val/test triple.
-
-Known limitation (documented deliberately): because the boundaries come from
-the requested *ratios* and the *number of runs*, appending runs to an existing
-dataset can move a run that sat near a boundary into the neighbouring split.
-Block 3 must therefore pin the run count (or use ``overrides``) when it needs a
-split that is frozen across dataset regenerations.
-"""
-
-from __future__ import annotations
-
-import math
+import random
 from collections import defaultdict
 from typing import Dict, List, Mapping, Sequence, Tuple
 
@@ -143,14 +109,30 @@ def _allocate_counts(n_runs: int, ratios: Mapping[str, float]) -> Dict[str, int]
     return counts
 
 
-def split_summary(splits: Mapping[str, str]) -> Dict[str, Dict[str, object]]:
-    """Summarise a run_id -> split mapping for the dataset manifest."""
+def split_summary(
+    splits: Mapping[str, str],
+    group_splits: Mapping[str, str] | None = None,
+    capture_splits: Mapping[str, str] | None = None,
+) -> Dict[str, Dict[str, object]]:
+    """Summarise a run_id / group_id -> split mapping for the dataset manifest."""
     summary: Dict[str, Dict[str, object]] = {}
     for name in SPLIT_NAMES:
         run_ids = sorted(rid for rid, split in splits.items() if split == name)
-        if not run_ids:
+        if not run_ids and not (group_splits and any(s == name for s in group_splits.values())):
             continue
-        summary[name] = {"run_count": len(run_ids), "run_ids": run_ids}
+        entry: Dict[str, object] = {
+            "run_count": len(run_ids),
+            "run_ids": run_ids,
+        }
+        if group_splits is not None:
+            gids = sorted(gid for gid, split in group_splits.items() if split == name)
+            entry["group_count"] = len(gids)
+            entry["group_ids"] = gids
+        if capture_splits is not None:
+            cids = sorted(cid for cid, split in capture_splits.items() if split == name)
+            entry["capture_count"] = len(cids)
+            entry["capture_ids"] = cids
+        summary[name] = entry
     return summary
 
 
@@ -170,17 +152,21 @@ def assert_no_run_leakage(splits: Mapping[str, str]) -> None:
                 f"Run '{run_id}' appears in splits '{seen[run_id]}' and '{split}'"
             )
 
+
 def assign_group_splits(
     groups: Sequence[Tuple[str, str]],
     ratios: Mapping[str, float] | None = None,
     overrides: Mapping[str, str] | None = None,
+    seed: int | None = None,
 ) -> Dict[str, str]:
     """Assign each generation group to a split, keeping the group intact.
 
-    ``groups`` is ordered and contains ``(generation_group_id, run_id)`` pairs
-    for every capture. All captures sharing the same ``generation_group_id`` are
-    treated as a single atomic unit: they are all assigned to the same split, or
-    the function raises.
+    ``groups`` is ordered and contains ``(generation_group_id, item_id)`` pairs
+    for every capture (or run). All captures sharing the same ``generation_group_id``
+    are treated as a single atomic unit: they are all assigned to the same split.
+
+    If ``seed`` is provided, the unique groups are permuted deterministically
+    prior to allocation.
 
     Raises:
         ValueError: if captures from the same generation group are assigned to
@@ -200,29 +186,43 @@ def assign_group_splits(
         raise ValueError("Split ratios must sum to a positive value")
     ratios = {name: value / total_ratio for name, value in ratios.items()}
 
-    # Group captures by generation_group_id, preserving first-seen order.
+    # Group items by generation_group_id, preserving first-seen order.
     group_order: List[str] = []
-    group_run_ids: Dict[str, List[str]] = defaultdict(list)
-    for group_id, run_id in groups:
-        if group_id not in group_run_ids:
+    group_item_ids: Dict[str, List[str]] = defaultdict(list)
+    for group_id, item_id in groups:
+        if group_id not in group_item_ids:
             group_order.append(group_id)
-        group_run_ids[group_id].append(run_id)
+        group_item_ids[group_id].append(item_id)
 
     group_splits: Dict[str, str] = {}
 
     # Apply overrides at the group level: every capture from an overridden group
     # must agree on the same split, otherwise the group is internally split.
-    for group_id, run_ids_for_group in group_run_ids.items():
-        overrides_for_group = {rid: overrides[rid] for rid in run_ids_for_group if rid in overrides}
+    for group_id, items_for_group in group_item_ids.items():
+        overrides_for_group = {}
+        if group_id in overrides:
+            overrides_for_group[group_id] = overrides[group_id]
+        for item_id in items_for_group:
+            if item_id in overrides:
+                overrides_for_group[item_id] = overrides[item_id]
         if overrides_for_group:
-            if len(set(overrides_for_group.values())) > 1:
+            unique_splits = set(overrides_for_group.values())
+            if len(unique_splits) > 1:
                 raise ValueError(
                     f"Generation group '{group_id}' contains captures assigned to "
                     f"different splits via overrides: {overrides_for_group}"
                 )
-            group_splits[group_id] = next(iter(overrides_for_group.values()))
+            group_splits[group_id] = next(iter(unique_splits))
 
     free_groups = [g for g in group_order if g not in group_splits]
+
+    # Permute groups deterministically if a seed is provided
+    if seed is not None:
+        rng = random.Random(seed)
+        shuffled = list(free_groups)
+        rng.shuffle(shuffled)
+        free_groups = shuffled
+
     counts = _allocate_counts(len(free_groups), ratios)
 
     cursor = 0
@@ -231,30 +231,30 @@ def assign_group_splits(
             group_splits[free_groups[cursor]] = name
             cursor += 1
 
-    # Expand group assignments to every capture.
-    capture_splits: Dict[str, str] = {}
-    for group_id, run_id in groups:
+    # Expand group assignments to every capture / item.
+    item_splits: Dict[str, str] = {}
+    for group_id, item_id in groups:
         if group_id not in group_splits:
             raise ValueError(f"Generation group '{group_id}' was not assigned a split")
-        capture_splits[run_id] = group_splits[group_id]
+        item_splits[item_id] = group_splits[group_id]
 
     # Ensure overrides are still honoured.
-    capture_splits.update(overrides)
-    return capture_splits
+    item_splits.update(overrides)
+    return item_splits
 
 
 def group_to_run_splits(
     groups: Sequence[Tuple[str, str]],
 ) -> Dict[str, str]:
-    """Return the generation_group_id for every run_id, based on the group order.
+    """Return the generation_group_id for every item_id, based on the group order.
 
     This is a helper for manifest/reporting paths that already have per-capture
-    ``(generation_group_id, run_id)`` pairs and want a run_id -> group mapping.
+    ``(generation_group_id, item_id)`` pairs and want an item_id -> group mapping.
     """
 
     group_of: Dict[str, str] = {}
-    for group_id, run_id in groups:
-        group_of[run_id] = group_id
+    for group_id, item_id in groups:
+        group_of[item_id] = group_id
     return group_of
 
 
@@ -264,19 +264,19 @@ def assert_no_group_leakage(
 ) -> None:
     """Raise if any generation group appears in more than one split.
 
-    ``splits`` maps run_id -> split.
-    ``groups`` maps run_id -> generation_group_id.
+    ``splits`` maps item_id -> split.
+    ``groups`` maps item_id -> generation_group_id.
     """
 
     group_split: Dict[str, str] = {}
-    for run_id, split in splits.items():
+    for item_id, split in splits.items():
         if split not in SPLIT_NAMES:
-            raise ValueError(f"Unknown split '{split}' for run '{run_id}'")
-        group_id = groups[run_id]
+            raise ValueError(f"Unknown split '{split}' for item '{item_id}'")
+        group_id = groups.get(item_id, item_id)
         if group_id in group_split and group_split[group_id] != split:
             raise ValueError(
                 f"Generation group '{group_id}' spans splits '{group_split[group_id]}' "
-                f"and '{split}' via run '{run_id}'"
+                f"and '{split}' via item '{item_id}'"
             )
         group_split[group_id] = split
 
