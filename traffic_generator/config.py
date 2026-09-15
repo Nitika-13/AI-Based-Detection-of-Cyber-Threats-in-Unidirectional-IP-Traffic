@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 # The seven supported flow labels (approved design).
 SUPPORTED_LABELS: List[str] = [
@@ -16,6 +16,23 @@ SUPPORTED_LABELS: List[str] = [
     "encrypted_anomaly",
 ]
 
+# Dataset schema version (changes when the output contract changes) and the
+# generator implementation version (imported from package __init__).
+DATASET_VERSION = "1.0.0"
+
+# Controlled difficulty levels. Difficulty is expressed purely through
+# OBSERVABLE traffic behaviour (rates, volumes, fan-out, timing regularity)
+# so that a future severity engine can be evaluated on it. Difficulty is
+# NEVER written into the feature matrix as a model input.
+DIFFICULTY_LEVELS: List[str] = ["low", "medium", "high"]
+DEFAULT_DIFFICULTY = "medium"
+
+# Run-level split names. Splitting happens strictly at the RUN level (never at
+# the packet or flow level) so that traffic generated from one run can never
+# appear in two different splits.
+SPLIT_NAMES: List[str] = ["train", "val", "test"]
+DEFAULT_SPLIT_RATIOS: Dict[str, float] = {"train": 0.6, "val": 0.2, "test": 0.2}
+
 # Approved unidirectional 5-tuple flow key.
 # (src_ip, src_port, dst_ip, dst_port, protocol)
 
@@ -26,6 +43,12 @@ SUPPORTED_LABELS: List[str] = [
 MAX_INTER_PACKET_GAP_SECONDS = 5.0
 IDLE_TIMEOUT_SECONDS = 15.0
 ACTIVE_TIMEOUT_SECONDS = 30.0
+
+# Hard generator invariant: no generated ground-truth flow may span longer
+# than this. It is deliberately equal to Block 2's active timeout so that a
+# ground-truth flow can never be split by the active timeout during
+# extraction. ``generator.py`` enforces this on every flow it emits.
+MAX_FLOW_DURATION_SECONDS = ACTIVE_TIMEOUT_SECONDS
 
 # Byte-count convention: sum of IP total_length (IP header + payload).
 BYTE_COUNT_CONVENTION = "ip_total_length"
@@ -48,6 +71,7 @@ class ScenarioConfig:
     flow_count: int = 20
     duration_seconds: float = 60.0
     benign_background_flows: int = 10
+    difficulty: str = DEFAULT_DIFFICULTY
     # Optional per-scenario overrides.
     packet_rate: Optional[float] = None  # packets per second (approx)
     packet_size_min: int = 64
@@ -67,6 +91,8 @@ class GeneratorConfig:
     scenarios: List[str] = field(
         default_factory=lambda: list(SUPPORTED_LABELS)
     )
+    # Controlled difficulty, applied to every scenario unless overridden.
+    difficulty: str = DEFAULT_DIFFICULTY
     # Base epoch for deterministic timestamps (seconds since epoch).
     base_epoch: float = 1726135200.0  # 2024-09-12T10:00:00Z
     src_ranges: List[str] = field(default_factory=lambda: list(DEFAULT_SRC_RANGES))
@@ -75,6 +101,19 @@ class GeneratorConfig:
     scenario_flow_counts: dict = field(default_factory=dict)
     scenario_durations: dict = field(default_factory=dict)
     scenario_params: dict = field(default_factory=dict)
+    # Optional per-scenario difficulty override: {"ddos": "high", ...}.
+    scenario_difficulty: dict = field(default_factory=dict)
+    # Run-level split ratios (train/val/test). Splitting is by RUN, never by
+    # packet or flow, to prevent near-identical traffic leaking across splits.
+    split_ratios: Dict[str, float] = field(
+        default_factory=lambda: dict(DEFAULT_SPLIT_RATIOS)
+    )
+    # Explicit run_id -> split override; wins over split_ratios when set.
+    run_splits: Dict[str, str] = field(default_factory=dict)
+
+    def difficulty_for(self, name: str) -> str:
+        """Return the difficulty to use for the given scenario name."""
+        return self.scenario_difficulty.get(name, self.difficulty)
 
     def scenario_config(self, name: str) -> ScenarioConfig:
         """Build a ScenarioConfig for the given scenario name."""
@@ -87,5 +126,6 @@ class GeneratorConfig:
             flow_count=self.scenario_flow_counts.get(name, 20),
             duration_seconds=self.scenario_durations.get(name, 60.0),
             benign_background_flows=benign_bg,
+            difficulty=self.difficulty_for(name),
             params=params,
         )

@@ -1,4 +1,18 @@
 # Python
+BULLYING.md
+deployment_slot_restart.md
+DEPENDENCY_DISCLAIMER.md
+ds_creation_scripts
+ETL-BASIC
+.pytest_cache
+.env
+git_commit.sh
+DBdummydata
+init_sql
+README-backendSELinux
+sample_config
+kubernetes
+.git
 __pycache__/
 *.py[cod]
 *.egg-info/

@@ -5,6 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from .feature_schema import FLOW_TABLE, all_feature_names, feature_document
+
+
+def _role_of(name: str) -> str:
+    """Return the schema role ('metadata'/'evidence_only'/'ml_feature') of a column."""
+    return feature_document(name, FLOW_TABLE)["role"]
+
 
 def make_flow_key(
     src_ip: str,
@@ -91,6 +98,16 @@ class ExtractedFlow:
     tls_record_len_mean: float = 0.0
     tls_record_len_max: int = 0
     tls_payload_entropy_mean: float = 0.0
+    # --- added in feature schema 1.0.0 (behavioural additions) ---
+    iat_cv: float = 0.0
+    tcp_syn_ratio: float = 0.0
+    tcp_flag_diversity: int = 0
+    payload_bytes_total: int = 0
+    payload_ratio: float = 0.0
+    payload_entropy_mean: float = 0.0
+    payload_entropy_max: float = 0.0
+    # Traceability only: never a model input.
+    direction: str = "unknown"
 
     def to_csv_row(self) -> dict:
         row = {}
@@ -151,4 +168,36 @@ FEATURE_COLUMNS: List[str] = [
     "tls_record_len_mean",
     "tls_record_len_max",
     "tls_payload_entropy_mean",
+    # --- feature schema 1.0.0 additions (appended; see feature_schema.py) ---
+    "iat_cv",
+    "tcp_syn_ratio",
+    "tcp_flag_diversity",
+    "payload_bytes_total",
+    "payload_ratio",
+    "payload_entropy_mean",
+    "payload_entropy_max",
+    # Traceability column, appended last. Never a model input.
+    "direction",
+]
+
+# ---------------------------------------------------------------------------
+# Column groups, derived from the canonical feature schema by NAME so that the
+# CSV header and the schema can never disagree. Ordering follows
+# FEATURE_COLUMNS (the historical, backward-compatible layout).
+# ---------------------------------------------------------------------------
+IDENTITY_COLUMNS: List[str] = [
+    name
+    for name in FEATURE_COLUMNS
+    if _role_of(name) == "metadata"
+]
+EVIDENCE_COLUMNS: List[str] = [
+    name
+    for name in FEATURE_COLUMNS
+    if _role_of(name) == "evidence_only"
+]
+# The canonical ML feature matrix: behavioural/numerical columns only.
+ML_FEATURE_COLUMNS: List[str] = [
+    name
+    for name in FEATURE_COLUMNS
+    if _role_of(name) == "ml_feature"
 ]

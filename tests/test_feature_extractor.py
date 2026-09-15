@@ -92,12 +92,14 @@ class TestFlowReconstruction:
         flows = reconstruct_flows(pkts, IDLE, ACTIVE)
         assert len(flows) == 2
 
-    def test_fin_does_not_split_documented_deviation(self):
-        # Option 2: FIN/RST marks connection end but packets re-join.
+    def test_fin_closes_flow_natural_rule(self):
+        # Natural rule (generator bug fixed): FIN/RST closes the flow, so a
+        # later packet with the same 5-tuple starts a NEW flow.
         pkts = [mk(1.0, flags="S"), mk(1.1, flags="PA"), mk(1.2, flags="FA"), mk(4.2, flags="S")]
         flows = reconstruct_flows(pkts, IDLE, ACTIVE)
-        assert len(flows) == 1
-        assert len(flows[0]) == 4
+        assert len(flows) == 2
+        assert len(flows[0]) == 3
+        assert len(flows[1]) == 1
 
     def test_icmp_ports_zero(self):
         pkts = [mk(1.0, proto="icmp", sport=0, dport=0)]
@@ -396,7 +398,7 @@ class TestIntegration:
         report = run_extraction(config)
         assert report["overall_status"] == "PASS"
         assert report["total_errors"] == 0
-        assert report["total_flows"] == 53
+        assert report["total_flows"] == 200
 
     def test_features_independent_of_gt(self):
         """Corrupt GT byte_count; extracted features must be unchanged."""

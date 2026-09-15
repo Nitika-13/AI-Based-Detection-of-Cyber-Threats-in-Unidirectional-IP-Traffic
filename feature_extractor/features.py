@@ -11,6 +11,7 @@ from .payload_features import (
     mode_smallest,
     parse_dns_payload,
     parse_tls_record,
+    shannon_entropy,
 )
 
 # TCP flag letters counted per flow.
@@ -38,11 +39,13 @@ def compute_flow_features(
     run_id: str,
     scenario: str,
     packets: List[PacketRecord],
+    direction: str = "unknown",
 ) -> ExtractedFlow:
     """Compute all features for one flow from its packets only.
 
     Every value is derived from the PCAP packet records; ground-truth CSV
-    values are never used here.
+    values are never used here. ``direction`` is the only exception and it is
+    traceability metadata, not a model input.
     """
     first = packets[0]
     start_ts = packets[0].timestamp
@@ -74,6 +77,8 @@ def compute_flow_features(
     # TCP flag summary (empty string + zero counts for non-TCP).
     tcp_flags = ""
     flag_counts = {f: 0 for f in _FLAG_NAMES}
+    flag_diversity = 0
+    syn_ratio = 0.0
     if first.protocol == "tcp":
         seen = set()
         for p in packets:
@@ -83,6 +88,21 @@ def compute_flow_features(
                     if f in flag_counts:
                         flag_counts[f] += 1
         tcp_flags = ",".join(sorted(seen))
+        flag_diversity = len(seen)
+        syn_ratio = flag_counts["S"] / packet_count if packet_count else 0.0
+
+    # Inter-arrival regularity: the C2 beaconing signature. A coefficient of
+    # variation near 0 means machine-like periodicity.
+    iat_cv = (iat_std / iat_mean) if iat_mean > 0 else 0.0
+
+    # Payload content metadata (raw bytes only; nothing is ever decrypted).
+    payload_bytes_total = sum(len(p.payload) for p in packets)
+    payload_ratio = payload_bytes_total / byte_count if byte_count else 0.0
+    payload_entropies = [
+        shannon_entropy(p.payload) for p in packets if p.payload
+    ]
+    payload_entropy_mean = _mean(payload_entropies)
+    payload_entropy_max = max(payload_entropies) if payload_entropies else 0.0
 
     # DNS metadata: parsed from UDP dst-port-53 payloads only.
     dns_lens: List[int] = []
@@ -160,6 +180,14 @@ def compute_flow_features(
         tls_record_len_mean=round(_mean([float(v) for v in tls_lens]), 6),
         tls_record_len_max=max(tls_lens) if tls_lens else 0,
         tls_payload_entropy_mean=round(_mean(tls_entropies), 6),
+        iat_cv=round(iat_cv, 6),
+        tcp_syn_ratio=round(syn_ratio, 6),
+        tcp_flag_diversity=flag_diversity,
+        payload_bytes_total=payload_bytes_total,
+        payload_ratio=round(payload_ratio, 6),
+        payload_entropy_mean=round(payload_entropy_mean, 6),
+        payload_entropy_max=round(payload_entropy_max, 6),
+        direction=direction,
     )
 
 

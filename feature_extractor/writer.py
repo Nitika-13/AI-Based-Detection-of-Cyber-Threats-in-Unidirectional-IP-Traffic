@@ -32,6 +32,16 @@ def write_labeled_csv(path: Path, rows: List[Dict]) -> None:
             writer.writerow(row)
 
 
+def write_host_windows_csv(path: Path, rows: List[Dict], columns: List[str]) -> None:
+    """Write the canonical cross-flow aggregate table (host_windows.csv)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=columns)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({col: row.get(col, "") for col in columns})
+
+
 def write_json(path: Path, data: Dict) -> None:
     """Write a JSON file with deterministic formatting."""
     path.parent.mkdir(parents=True, exist_ok=True)

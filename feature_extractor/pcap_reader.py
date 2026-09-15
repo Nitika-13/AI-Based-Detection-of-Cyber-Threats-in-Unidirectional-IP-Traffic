@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import List
+from typing import Iterator, List
 
 from .models import PacketRecord
 
@@ -27,16 +26,9 @@ def _flag_str(flags) -> str:
         return ""
 
 
-def read_pcap(path: Path) -> List[PacketRecord]:
-    """Read a PCAP file and return PacketRecords sorted by timestamp.
-
-    Read-only: uses rdpcap (no packet transmission, no live capture).
-    """
-    from scapy.utils import rdpcap
-
-    packets = rdpcap(str(path))
+def _parse_packets(packets) -> List[PacketRecord]:
+    """Convert Scapy packets into PacketRecords (read-only dissection)."""
     records: List[PacketRecord] = []
-
     for pkt in packets:
         if "IP" not in pkt:
             continue
@@ -72,6 +64,29 @@ def read_pcap(path: Path) -> List[PacketRecord]:
                 payload=payload,
             )
         )
-
-    records.sort(key=lambda r: r.timestamp)
     return records
+
+
+def iter_pcap_records(path, sort_by_timestamp: bool = True) -> "Iterator[PacketRecord]":
+    """Yield PacketRecords from a PCAP (read-only; no live capture).
+
+    ``sort_by_timestamp`` keeps the invariant the flow manager relies on
+    (packets arrive in non-decreasing timestamp order). It defaults to True
+    because idle/active-timeout segmentation is only well defined for ordered
+    input.
+    """
+    from scapy.utils import rdpcap
+
+    records = _parse_packets(rdpcap(str(path)))
+    if sort_by_timestamp:
+        records.sort(key=lambda r: r.timestamp)
+    yield from records
+
+
+def read_pcap(path) -> List[PacketRecord]:
+    """Read a PCAP and return PacketRecords sorted by timestamp.
+
+    Kept for backward compatibility; the streaming sensor uses
+    :func:`iter_pcap_records` instead.
+    """
+    return list(iter_pcap_records(path))

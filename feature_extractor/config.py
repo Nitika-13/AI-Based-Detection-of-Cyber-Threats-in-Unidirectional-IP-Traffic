@@ -23,6 +23,15 @@ MIN_DURATION_FOR_RATES = 1e-6
 # Supported protocols (Block 1 conventions).
 SUPPORTED_PROTOCOLS = ("tcp", "udp", "icmp")
 
+# Canonical streaming input modes (see sensor.py). Sequential and replay read
+# a PCAP; live is a reserved, explicitly-unimplemented stub.
+SENSOR_MODES = ("sequential", "replay")
+
+# Default monitored prefixes used ONLY to label the traceability-only
+# ``direction`` column (outbound/inbound/unknown). Passive bookkeeping on
+# observed addresses; never a probe, handshake, or transmission.
+DEFAULT_MONITORED_PREFIXES = ("10.0.0.0/24",)
+
 
 @dataclass
 class ExtractorConfig:
@@ -36,3 +45,15 @@ class ExtractorConfig:
     extractor_version: str = "0.2.0"
     # Runs/scenarios filter (empty = all from manifest).
     scenarios: List[str] = field(default_factory=list)
+    # Canonical sensor mode: "sequential" (MODE A) or "replay" (MODE B).
+    # "live" (MODE C) is accepted at the sensor layer but raises
+    # NotImplementedError there, so extraction never silently falls back.
+    mode: str = "sequential"
+    # Replay pacing: 0 disables pacing (byte-identical to sequential).
+    replay_speed: float = 0.0
+    # Tumbling window for host_windows.csv.
+    window_seconds: float = 10.0
+    # Monitored prefixes for the direction *label* only.
+    monitored_prefixes: List[str] = field(
+        default_factory=lambda: ["10.0.0.0/24"]
+    )
